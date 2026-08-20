@@ -7,14 +7,15 @@ export const config = {
   cellId: process.env.HYDRA_CELL_ID ?? "cell-0",
   token: process.env.HYDRA_TOKEN ?? "local-development-token-32-bytes",
 
-  // --- LLM (any OpenAI-compatible chat/completions endpoint) ---
-  llmBaseUrl: process.env.LLM_BASE_URL ?? "https://api.openai.com/v1",
-  llmApiKey: process.env.LLM_API_KEY ?? "",
+  // --- LLM (Vercel AI SDK) ---
+  /** openai | anthropic | google | openai-compatible (default) */
+  llmProvider: process.env.LLM_PROVIDER ?? "openai",
   llmModel: process.env.LLM_MODEL ?? "gpt-4o-mini",
+  llmApiKey: process.env.LLM_API_KEY ?? "",
+  /** Only used by openai-compatible providers (OpenRouter, Groq, Ollama, ...). */
+  llmBaseUrl: process.env.LLM_BASE_URL ?? "https://api.openai.com/v1",
 
   // --- Memory behaviour ---
-  /** Facts returned per question before synthesis. */
   maxFacts: Number(process.env.MEM_MAX_FACTS ?? 24),
-  /** Below this many supporting facts, abstain instead of answering. */
   abstainThreshold: Number(process.env.MEM_ABSTAIN_THRESHOLD ?? 1),
 };

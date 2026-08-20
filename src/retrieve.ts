@@ -1,27 +1,23 @@
+import { z } from "zod";
 import { config } from "./config.js";
 import { cypher } from "./hydra.js";
-import { chatJson } from "./llm.js";
+import { object } from "./llm.js";
 import { canonEntity } from "./extract.js";
 import type { RecallResult, RetrievedFact } from "./types.js";
 
-interface QueryLink {
-  entities: string[];
-  attributes: string[];
-  /** "current" | "point_in_time" | "history" — how to apply validity filters. */
-  temporal: "current" | "point_in_time" | "history";
-  /** ISO ts when temporal === "point_in_time", else null. */
-  at: string | null;
-}
+const QueryLinkSchema = z.object({
+  entities: z.array(z.string()).describe('Lowercase canonical entity names likely to appear; "user" almost always belongs here'),
+  attributes: z.array(z.string()).describe("Likely snake_case fact slots (home_city, job_title, ...); empty = no filter"),
+  temporal: z.enum(["current", "point_in_time", "history"]).describe(
+    '"current" for present-state questions, "point_in_time" for as-of-a-date questions, "history" for before/after/change questions',
+  ),
+  at: z.string().nullable().describe('ISO timestamp when temporal is "point_in_time", else null'),
+});
 
-const LINK_SYSTEM = `You map a question about a user's chat history to graph lookup keys.
-Return JSON: {"entities": string[], "attributes": string[], "temporal": "current"|"point_in_time"|"history", "at": string|null}
-- entities: lowercase canonical entity names likely to appear ("user" almost always belongs here).
-- attributes: likely snake_case fact slots (home_city, job_title, ...). Empty array = no attribute filter.
-- temporal: "current" for present-state questions, "point_in_time" for "as of <date>" questions (set "at"),
-  "history" for before/after/change questions where superseded values matter.`;
+const LINK_SYSTEM = "You map a question about a user's chat history to graph lookup keys.";
 
 export async function recall(question: string): Promise<RecallResult> {
-  const link = await chatJson<QueryLink>(LINK_SYSTEM, question);
+  const link = await object(QueryLinkSchema, LINK_SYSTEM, question);
   const entities = link.entities.map(canonEntity);
 
   // Anchored traversal. Superseded facts are included when the question is

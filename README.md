@@ -1,12 +1,12 @@
-# HydraMem
+# hymem
 
 **Temporal knowledge-graph agent memory on the [HydraDB](https://github.com/hydra-db/hydradb) OSS engine.**
 Built for Hack Hydra 2026 · Track 03 (Memory and context retrieval).
 
-Agents forget across sessions, and long-context models fail on exactly three things LongMemEval measures: chronology, information that was later overwritten, and knowing when the answer isn't there. HydraMem treats memory as what it actually is — a **temporal graph** — instead of a bag of embeddings:
+Agents forget across sessions, and long-context models fail on exactly three things LongMemEval measures: chronology, information that was later overwritten, and knowing when the answer isn't there. hymem treats memory as what it actually is — a **temporal graph** — instead of a bag of embeddings:
 
 - Facts are `(:Fact)` nodes in HydraDB with validity intervals (`valid_from` / `valid_to`).
-- When new information contradicts old information about the same `(subject, attribute)`, the old fact is closed and chained via a `[:SUPERSEDES]` edge — so *"where does the user live?"* and *"where did they live before?"* both have first-class answers.
+- When new information contradicts old information about the same `(subject, attribute)`, the old fact is closed and chained via a `[:SUPERSEDES]` edge — so _"where does the user live?"_ and _"where did they live before?"_ both have first-class answers.
 - Every fact is linked `[:STATED_IN]` to its source session: inspectable, traceable, deletable. No hidden embeddings.
 - Recall is **graph traversal** (entity-anchored MATCH + temporal filters), and abstention is **structural**: no supporting facts in the graph → "I don't know based on the conversation history," before an LLM ever gets a chance to guess.
 
@@ -16,7 +16,7 @@ It ships in two usable forms: a CLI/eval pipeline for LongMemEval, and an **MCP 
 
 HydraDB stores the entire memory graph and executes every recall. Ingestion writes batched `UNWIND` Cypher over Bolt; the supersession pass is a Cypher `MATCH ... MERGE (new)-[:SUPERSEDES]->(old)`; recall is an entity-anchored traversal returning facts with their supersession history in one query. Reads are snapshot-consistent, and storage is object-store-native, so the memory survives process restarts and scales past RAM.
 
-Without HydraDB there is no supersession chain to walk, no session-provenance edges, and no structural abstention test — a vector index can return "similar" chunks but cannot represent *"this value replaced that one on this date."* That temporal structure is the whole system.
+Without HydraDB there is no supersession chain to walk, no session-provenance edges, and no structural abstention test — a vector index can return "similar" chunks but cannot represent _"this value replaced that one on this date."_ That temporal structure is the whole system.
 
 ## Quick start
 
@@ -45,9 +45,9 @@ npm run eval -- path/to/longmemeval_s.json 50
 ```json
 {
   "mcpServers": {
-    "hydramem": {
+    "hymem": {
       "command": "npx",
-      "args": ["tsx", "/path/to/hydramem/src/mcp-server.ts"],
+      "args": ["tsx", "/path/to/hymem/src/mcp-server.ts"],
       "env": { "LLM_API_KEY": "..." }
     }
   }
@@ -107,3 +107,33 @@ scripts/run-hydra.sh  local graph-node launcher (env from the HydraDB README)
 ## License
 
 Apache-2.0 (this project's code). HydraDB itself is AGPL-3.0 and is used unmodified as an external service.
+
+## Choosing an LLM provider
+
+hymem uses the Vercel AI SDK, so any provider works via env vars — no code changes:
+
+| Provider                                      | .env                                                                |
+| --------------------------------------------- | ------------------------------------------------------------------- |
+| OpenAI                                        | `LLM_PROVIDER=openai` `LLM_MODEL=gpt-4o-mini`                       |
+| Anthropic                                     | `LLM_PROVIDER=anthropic` `LLM_MODEL=claude-sonnet-4-5`              |
+| Google                                        | `LLM_PROVIDER=google` `LLM_MODEL=gemini-2.0-flash`                  |
+| OpenRouter / Groq / Ollama / vLLM / LM Studio | `LLM_PROVIDER=openai-compatible` `LLM_BASE_URL=...` `LLM_MODEL=...` |
+
+Structured extraction uses `generateObject` with zod schemas, so fact JSON is validated by the SDK — no hand-rolled parsing.
+
+## Using hymem as a library
+
+````ts
+import { ingestHistory, recall, answer } from "hymem";
+
+await ingestHistory(sessions);
+const r = await recall("Where does the user live now?");
+if (!r.abstained) console.log(r.contextBlock);
+
+
+After publishing, the two binaries work anywhere:
+
+```bash
+npx hymem inspect user
+npx hymem-mcp        # MCP config: { "command": "npx", "args": ["-y", "hymem-mcp"] }
+````

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * HydraMem MCP server — gives any MCP client (Claude Code, Codex, etc.)
+ * hymem MCP server — gives any MCP client (Claude Code, Codex, etc.)
  * persistent, inspectable, temporal memory backed by the HydraDB graph engine.
  *
  * Tools:
@@ -10,7 +10,7 @@
  *   memory_forget  — delete facts by id
  *
  * Run: `npx tsx src/mcp-server.ts`, or add to an MCP config:
- *   { "mcpServers": { "hydramem": { "command": "npx", "args": ["tsx", "src/mcp-server.ts"] } } }
+ *   { "mcpServers": { "hymem": { "command": "npx", "args": ["tsx", "src/mcp-server.ts"] } } }
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -20,7 +20,7 @@ import { recall } from "./retrieve.js";
 import { answer } from "./answer.js";
 import { cypher, closeHydra } from "./hydra.js";
 
-const server = new McpServer({ name: "hydramem", version: "0.1.0" });
+const server = new McpServer({ name: "hymem", version: "0.1.0" });
 
 server.registerTool(
   "memory_save",

@@ -1,14 +1,27 @@
 {
-  "name": "hydramem",
+  "name": "hymem",
   "version": "0.1.0",
-  "description": "Temporal knowledge-graph agent memory on the HydraDB OSS engine (Hack Hydra Track 03)",
+  "description": "Temporal knowledge-graph agent memory on the HydraDB OSS engine — CLI, library, and MCP server",
   "type": "module",
   "license": "Apache-2.0",
-  "bin": { "hydramem-mcp": "./dist/mcp-server.js" },
+  "keywords": ["agent-memory", "hydradb", "knowledge-graph", "mcp", "temporal", "longmemeval", "ai"],
+  "engines": { "node": ">=20" },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" }
+  },
+  "bin": {
+    "hymem": "./dist/cli.js",
+    "hymem-mcp": "./dist/mcp-server.js"
+  },
+  "files": ["dist", "README.md", "LICENSE", "scripts/run-hydra.sh", ".env.example"],
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run typecheck && npm run build",
     "bootstrap": "tsx src/bootstrap.ts",
+    "cli": "tsx src/cli.ts",
     "ingest": "tsx src/cli.ts ingest",
     "ask": "tsx src/cli.ts ask",
     "inspect": "tsx src/cli.ts inspect",
@@ -16,8 +29,14 @@
     "mcp": "tsx src/mcp-server.ts"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.21.0",
-    "neo4j-driver": "^6.0.1",
+    "@ai-sdk/anthropic": "^4.0.40",
+    "@ai-sdk/google": "^4.0.0",
+    "@ai-sdk/openai": "^4.0.44",
+    "@ai-sdk/openai-compatible": "^3.0.32",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "ai": "^7.0.70",
+    "commander": "^15.0.0",
+    "neo4j-driver": "^6.2.0",
     "zod": "^3.25.0"
   },
   "devDependencies": {

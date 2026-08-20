@@ -1,4 +1,4 @@
-import { chat } from "./llm.js";
+import { text } from "./llm.js";
 import { recall } from "./retrieve.js";
 
 export const ABSTAIN_ANSWER = "I don't know based on the conversation history.";
@@ -20,6 +20,6 @@ export async function answer(question: string): Promise<{ answer: string; abstai
     return { answer: ABSTAIN_ANSWER, abstained: true, contextBlock: r.contextBlock };
   }
 
-  const reply = await chat(SYSTEM, `Memory facts:\n${r.contextBlock}\n\nQuestion: ${question}`);
+  const reply = await text(SYSTEM, `Memory facts:\n${r.contextBlock}\n\nQuestion: ${question}`);
   return { answer: reply.trim(), abstained: false, contextBlock: r.contextBlock };
 }

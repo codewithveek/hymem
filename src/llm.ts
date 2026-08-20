@@ -1,36 +1,53 @@
+/**
+ * LLM access via the Vercel AI SDK — provider-agnostic.
+ * Pick a provider with LLM_PROVIDER: openai | anthropic | google | openai-compatible.
+ * "openai-compatible" + LLM_BASE_URL covers OpenRouter, Groq, Ollama, LM Studio, vLLM, etc.
+ */
+import { generateText, generateObject } from "ai";
+import type { LanguageModel } from "ai";
+import { createOpenAI } from "@ai-sdk/openai";
+import { createAnthropic } from "@ai-sdk/anthropic";
+import { createGoogleGenerativeAI } from "@ai-sdk/google";
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import type { z } from "zod";
 import { config } from "./config.js";
 
-export async function chat(system: string, user: string, temperature = 0): Promise<string> {
-  const res = await fetch(`${config.llmBaseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.llmApiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: config.llmModel,
-      temperature,
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-    }),
-  });
-  if (!res.ok) throw new Error(`LLM ${res.status}: ${await res.text()}`);
-  const data = (await res.json()) as { choices: { message: { content: string } }[] };
-  return data.choices[0]?.message?.content ?? "";
+let cached: LanguageModel | null = null;
+
+export function model(): LanguageModel {
+  if (cached) return cached;
+  const { llmProvider, llmModel, llmApiKey, llmBaseUrl } = config;
+  switch (llmProvider) {
+    case "openai":
+      cached = createOpenAI({ apiKey: llmApiKey })(llmModel);
+      break;
+    case "anthropic":
+      cached = createAnthropic({ apiKey: llmApiKey })(llmModel);
+      break;
+    case "google":
+      cached = createGoogleGenerativeAI({ apiKey: llmApiKey })(llmModel);
+      break;
+    default:
+      cached = createOpenAICompatible({
+        name: llmProvider || "openai-compatible",
+        apiKey: llmApiKey,
+        baseURL: llmBaseUrl,
+      })(llmModel);
+  }
+  return cached;
 }
 
-/** Call the LLM expecting JSON; strip fences; retry once on parse failure. */
-export async function chatJson<T>(system: string, user: string): Promise<T> {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const raw = await chat(system + "\nRespond with valid JSON only. No prose, no code fences.", user);
-    const cleaned = raw.replace(/^```(?:json)?/m, "").replace(/```\s*$/m, "").trim();
-    try {
-      return JSON.parse(cleaned) as T;
-    } catch {
-      if (attempt === 1) throw new Error(`LLM returned unparseable JSON:\n${raw.slice(0, 400)}`);
-    }
-  }
-  throw new Error("unreachable");
+/** Free-text generation. */
+export async function text(system: string, prompt: string): Promise<string> {
+  const r = await generateText({ model: model(), system, prompt, temperature: 0 });
+  return r.text;
+}
+
+/**
+ * Schema-validated structured generation. The AI SDK handles JSON mode,
+ * parsing, and validation against the zod schema — no manual fence-stripping.
+ */
+export async function object<T>(schema: z.ZodType<T>, system: string, prompt: string): Promise<T> {
+  const r = await generateObject({ model: model(), schema, system, prompt, temperature: 0 });
+  return r.object as T;
 }
