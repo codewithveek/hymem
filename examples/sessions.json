@@ -1,0 +1,23 @@
+[
+  {
+    "id": "s1", "ts": "2026-03-01T10:00:00Z", "idx": 0,
+    "turns": [
+      {"role": "user", "content": "I just moved to Atlanta for my new job at Delta as a data analyst."},
+      {"role": "assistant", "content": "Congrats on the move and the new role!"}
+    ]
+  },
+  {
+    "id": "s2", "ts": "2026-05-15T09:00:00Z", "idx": 1,
+    "turns": [
+      {"role": "user", "content": "By the way, I'm lactose intolerant, so keep food suggestions dairy-free."},
+      {"role": "assistant", "content": "Noted, dairy-free from now on."}
+    ]
+  },
+  {
+    "id": "s3", "ts": "2026-07-20T18:30:00Z", "idx": 2,
+    "turns": [
+      {"role": "user", "content": "Big news: I relocated to Denver last week for a promotion to senior analyst."},
+      {"role": "assistant", "content": "That's great — enjoy Denver!"}
+    ]
+  }
+]

@@ -1,0 +1,28 @@
+{
+  "name": "hydramem",
+  "version": "0.1.0",
+  "description": "Temporal knowledge-graph agent memory on the HydraDB OSS engine (Hack Hydra Track 03)",
+  "type": "module",
+  "license": "Apache-2.0",
+  "bin": { "hydramem-mcp": "./dist/mcp-server.js" },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "bootstrap": "tsx src/bootstrap.ts",
+    "ingest": "tsx src/cli.ts ingest",
+    "ask": "tsx src/cli.ts ask",
+    "inspect": "tsx src/cli.ts inspect",
+    "eval": "tsx src/eval.ts",
+    "mcp": "tsx src/mcp-server.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.21.0",
+    "neo4j-driver": "^6.0.1",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.9.0"
+  }
+}
