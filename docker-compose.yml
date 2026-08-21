@@ -1,0 +1,42 @@
+# One command, same result on Linux, macOS, and Windows (Docker Desktop / WSL2 backend):
+#   HYDRADB_REPO=~/hydradb docker compose up --build
+# PowerShell:
+#   $env:HYDRADB_REPO="C:\path-to-hydradb-repo-clone"; docker compose up --build
+#
+# The container is Linux either way, so the Rust/GraphBLAS build behaves
+# identically on every host OS — this is the recommended Windows path.
+
+services:
+  hydradb:
+    build:
+      context: ${HYDRADB_REPO:?Set HYDRADB_REPO to your clone of github.com/hydra-db/hydradb}
+      # If the repo's Dockerfile lives elsewhere or is named differently,
+      # adjust `dockerfile:` here to match.
+    user: "root"
+    ports:
+      - "7687:7687" # Bolt
+      - "8443:8443" # HTTP query API
+      - "9090:9090" # Admin
+    environment:
+      CLOUD_PROVIDER: local
+      LOCAL_PATH: /data/store
+      GRAPH_NAMESPACE: default
+      GRAPH_ID: default
+      GRAPH_CELL_ID: cell-0
+      GRAPH_CELLS: cell-0
+      GRAPH_NODE_ID: node-0
+      GRAPH_BOLT_NODE_ADDRESSES: node-0=0.0.0.0:7687
+      GRAPH_ADVERTISED_BOLT_ADDR: 127.0.0.1:7687
+      GRAPH_DATA_CACHE_DIR: /data/cache
+      GRAPH_AUTH_TOKEN_FILE: /data/auth-token
+      GRAPH_ALLOW_PLAINTEXT: "true"
+      RUST_MIN_STACK: "33554432"
+    volumes:
+      - hydradb-data:/data
+    entrypoint: >
+      sh -c "mkdir -p /data/store /data/cache &&
+             printf 'local-development-token-32-bytes' > /data/auth-token &&
+             exec graph-node"
+
+volumes:
+  hydradb-data:

@@ -4,18 +4,37 @@
   "description": "Temporal knowledge-graph agent memory on the HydraDB OSS engine — CLI, library, and MCP server",
   "type": "module",
   "license": "Apache-2.0",
-  "keywords": ["agent-memory", "hydradb", "knowledge-graph", "mcp", "temporal", "longmemeval", "ai"],
-  "engines": { "node": ">=20" },
+  "keywords": [
+    "agent-memory",
+    "hydradb",
+    "knowledge-graph",
+    "mcp",
+    "temporal",
+    "longmemeval",
+    "ai"
+  ],
+  "engines": {
+    "node": ">=22.17"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" }
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
   },
   "bin": {
     "hymem": "./dist/cli.js",
     "hymem-mcp": "./dist/mcp-server.js"
   },
-  "files": ["dist", "README.md", "LICENSE", "scripts/run-hydra.sh", ".env.example"],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "scripts/run-hydra.sh",
+    ".env.example"
+  ],
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",

@@ -1,3 +1,15 @@
+/**
+ * Loads .env from the current working directory on all platforms (Linux,
+ * macOS, Windows) using Node's built-in loader — no shell `source`, no
+ * cross-env, no dotenv dependency. Real environment variables still win:
+ * loadEnvFile does not overwrite variables that are already set.
+ */
+try {
+  process.loadEnvFile(".env"); // Node >= 20.12
+} catch {
+  /* no .env file — fine, env vars may be set by the shell/CI/Docker */
+}
+
 export const config = {
   // --- HydraDB node (see scripts/run-hydra.sh and the repo README) ---
   boltUrl: process.env.HYDRA_BOLT_URL ?? "neo4j://127.0.0.1:7687",
