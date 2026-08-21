@@ -19,6 +19,8 @@ import { ingestSession } from "./ingest.js";
 import { recall } from "./retrieve.js";
 import { answer } from "./answer.js";
 import { cypher, closeHydra } from "./hydra.js";
+import { entityNodeId, factNodeId } from "./ids.js";
+import { canonEntity } from "./extract.js";
 
 const server = new McpServer({ name: "hymem", version: "0.1.0" });
 
@@ -96,16 +98,15 @@ server.registerTool(
   },
   async ({ entity }) => {
     const rows = await cypher<{ id: string; text: string; status: string; observed_at: string; session_id: string }>(
+      // Entity-anchored by integer id (HydraDB dialect: see src/hydra.ts); f.key is the human-readable fact id.
       entity
-        ? `MATCH (f:Fact)-[:ABOUT]->(e:Entity {name: $entity})
-           OPTIONAL MATCH (f)-[:STATED_IN]->(s:Session)
-           RETURN f.id AS id, f.text AS text, f.status AS status, f.observed_at AS observed_at, s.id AS session_id
+        ? `MATCH (f:Fact)-[:ABOUT]->(e:Entity {id: $eid})
+           RETURN f.key AS id, f.text AS text, f.status AS status, f.observed_at AS observed_at, f.session_id AS session_id
            ORDER BY observed_at DESC LIMIT 50`
         : `MATCH (f:Fact)
-           OPTIONAL MATCH (f)-[:STATED_IN]->(s:Session)
-           RETURN f.id AS id, f.text AS text, f.status AS status, f.observed_at AS observed_at, s.id AS session_id
+           RETURN f.key AS id, f.text AS text, f.status AS status, f.observed_at AS observed_at, f.session_id AS session_id
            ORDER BY observed_at DESC LIMIT 50`,
-      { entity: entity?.toLowerCase() },
+      entity ? { eid: entityNodeId(canonEntity(entity)) } : {},
     );
     return {
       content: [{
@@ -128,7 +129,7 @@ server.registerTool(
     },
   },
   async ({ ids }) => {
-    await cypher(`UNWIND $ids AS fid MATCH (f:Fact {id: fid}) DETACH DELETE f`, { ids });
+    for (const fid of ids) await cypher(`MATCH (f:Fact {id: $fid}) DETACH DELETE f`, { fid: factNodeId(fid) });
     return { content: [{ type: "text" as const, text: `Deleted ${ids.length} fact(s).` }] };
   },
 );

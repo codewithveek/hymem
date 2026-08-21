@@ -1,77 +1,78 @@
-import { cypher } from "./hydra.js";
+import { cypher, int, mergeEdges, upsertNodes } from "./hydra.js";
+import { entityNodeId, factNodeId, sessionNodeId } from "./ids.js";
 import { extractFacts } from "./extract.js";
 import type { Fact, SessionInput } from "./types.js";
 
 /**
- * Write one session's facts into the graph, then run the supersession pass.
+ * Writes stay inside HydraDB's Cypher subset (dialect note in src/hydra.ts):
+ * batched UNWIND node upserts, batched UNWIND edge merges between matched
+ * nodes, and MATCH ... SET / REMOVE for property updates. No MATCH ... MERGE,
+ * no coalesce(), integer ids everywhere.
  *
- * Data model (see README):
- *   (:Session {id, ts, idx})-[:NEXT]->(:Session)
- *   (:Fact {id, subject, attribute, value, text, observed_at, valid_from, valid_to, status})
- *   (:Fact)-[:STATED_IN]->(:Session)
- *   (:Fact)-[:ABOUT]->(:Entity {name})
- *   (:Fact)-[:SUPERSEDES]->(:Fact)
+ * Fact identity is hash(subject|attribute|value), so re-stating a fact later
+ * re-activates the SAME node: status/valid_from are refreshed and valid_to is
+ * cleared, and the supersession pass then closes whichever other value was
+ * active in between. Re-ingesting the same history is idempotent.
  */
 export async function ingestSession(session: SessionInput, prevSessionId?: string): Promise<Fact[]> {
   const facts = await extractFacts(session);
+  const sid = sessionNodeId(session.id);
 
   // 1. Session node + timeline backbone.
-  await cypher(
-    `MERGE (s:Session {id: $id}) SET s.ts = $ts, s.idx = $idx`,
-    { id: session.id, ts: session.ts, idx: session.idx },
-  );
+  await upsertNodes("Session", [{ id: sid, props: { key: session.id, ts: session.ts, idx: int(session.idx) } }]);
   if (prevSessionId) {
-    await cypher(
-      `MATCH (a:Session {id: $prev}), (b:Session {id: $cur}) MERGE (a)-[:NEXT]->(b)`,
-      { prev: prevSessionId, cur: session.id },
-    );
+    await mergeEdges("Session", "NEXT", "Session", [{ src: sessionNodeId(prevSessionId), dst: sid }]);
   }
   if (facts.length === 0) return facts;
 
-  // 2. Facts + provenance, one batched UNWIND write.
-  await cypher(
-    `UNWIND $facts AS f
-     MATCH (s:Session {id: $sid})
-     MERGE (fact:Fact {id: f.id})
-       SET fact.subject = f.subject, fact.attribute = f.attribute, fact.value = f.value,
-           fact.text = f.text, fact.observed_at = f.observedAt,
-           fact.valid_from = coalesce(fact.valid_from, f.observedAt),
-           fact.status = coalesce(fact.status, 'active')
-     MERGE (fact)-[:STATED_IN]->(s)`,
-    { facts, sid: session.id },
-  );
-
-  // 3. Entity links (flattened to keep the Cypher inside the supported subset).
-  const links = facts.flatMap((f) => f.entities.map((e) => ({ fid: f.id, ename: e })));
-  if (links.length > 0) {
-    await cypher(
-      `UNWIND $links AS l
-       MATCH (fact:Fact {id: l.fid})
-       MERGE (e:Entity {name: l.ename})
-       MERGE (fact)-[:ABOUT]->(e)`,
-      { links },
-    );
+  // 2. Fact nodes. session_id is stored as a property so reads never need
+  //    an OPTIONAL MATCH for provenance.
+  await upsertNodes("Fact", facts.map((f) => ({
+    id: factNodeId(f.id),
+    props: {
+      key: f.id, subject: f.subject, attribute: f.attribute, value: f.value, text: f.text,
+      observed_at: f.observedAt, session_id: f.sessionId,
+      status: "active", valid_from: f.observedAt,
+    },
+  })));
+  // A re-activated fact may still carry valid_to from an earlier supersession.
+  for (const f of facts) {
+    await cypher(`MATCH (n:Fact {id: $id}) REMOVE n.valid_to`, { id: factNodeId(f.id) });
   }
 
-  // 4. Supersession pass: same (subject, attribute), different value, older observation
-  //    → close the old fact's validity and chain it. This is the temporal core.
-  await cypher(
-    `UNWIND $facts AS f
-     MATCH (new:Fact {id: f.id})
-     MATCH (old:Fact {status: 'active'})
-     WHERE old.subject = new.subject
-       AND old.attribute = new.attribute
-       AND old.value <> new.value
-       AND old.observed_at < new.observed_at
-     SET old.status = 'superseded', old.valid_to = new.observed_at
-     MERGE (new)-[:SUPERSEDES]->(old)`,
-    { facts },
-  );
+  // 3. Provenance + entity edges (batched; endpoints must already exist).
+  await mergeEdges("Fact", "STATED_IN", "Session", facts.map((f) => ({ src: factNodeId(f.id), dst: sid })));
+  const entityNames = [...new Set(facts.flatMap((f) => f.entities))];
+  if (entityNames.length > 0) {
+    await upsertNodes("Entity", entityNames.map((name) => ({ id: entityNodeId(name), props: { name } })));
+    await mergeEdges("Fact", "ABOUT", "Entity", facts.flatMap((f) =>
+      f.entities.map((name) => ({ src: factNodeId(f.id), dst: entityNodeId(name) })),
+    ));
+  }
 
+  // 4. Supersession: read candidates, close each, then chain (new)-[:SUPERSEDES]->(old).
+  for (const f of facts) {
+    const fid = factNodeId(f.id);
+    const olds = await cypher<{ oldId: number }>(
+      `MATCH (old:Fact)
+       WHERE old.status = 'active' AND old.id <> $id
+         AND old.subject = $subject AND old.attribute = $attribute
+         AND old.value <> $value AND old.observed_at < $ts
+       RETURN old.id AS oldId`,
+      { id: fid, subject: f.subject, attribute: f.attribute, value: f.value, ts: f.observedAt },
+    );
+    if (olds.length === 0) continue;
+    for (const { oldId } of olds) {
+      await cypher(
+        `MATCH (old:Fact {id: $oldId}) SET old.status = 'superseded', old.valid_to = $ts`,
+        { oldId: int(oldId), ts: f.observedAt },
+      );
+    }
+    await mergeEdges("Fact", "SUPERSEDES", "Fact", olds.map(({ oldId }) => ({ src: fid, dst: int(oldId) })));
+  }
   return facts;
 }
 
-/** Ingest a full ordered history (e.g. one LongMemEval instance's haystack). */
 export async function ingestHistory(sessions: SessionInput[]): Promise<number> {
   const ordered = [...sessions].sort((a, b) => a.ts.localeCompare(b.ts));
   let total = 0;

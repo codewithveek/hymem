@@ -1,7 +1,7 @@
 # One command, same result on Linux, macOS, and Windows (Docker Desktop / WSL2 backend):
 #   HYDRADB_REPO=~/hydradb docker compose up --build
 # PowerShell:
-#   $env:HYDRADB_REPO="C:\path-to-hydradb-repo-clone"; docker compose up --build
+#   $env:HYDRADB_REPO="C:\src\hydradb"; docker compose up --build
 #
 # The container is Linux either way, so the Rust/GraphBLAS build behaves
 # identically on every host OS — this is the recommended Windows path.
@@ -12,11 +12,10 @@ services:
       context: ${HYDRADB_REPO:?Set HYDRADB_REPO to your clone of github.com/hydra-db/hydradb}
       # If the repo's Dockerfile lives elsewhere or is named differently,
       # adjust `dockerfile:` here to match.
-    user: "root"
     ports:
-      - "7687:7687" # Bolt
-      - "8443:8443" # HTTP query API
-      - "9090:9090" # Admin
+      - "7687:7687"   # Bolt
+      - "8443:8443"   # HTTP query API
+      - "9090:9090"   # Admin
     environment:
       CLOUD_PROVIDER: local
       LOCAL_PATH: /data/store

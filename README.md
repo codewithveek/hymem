@@ -14,7 +14,9 @@ It ships in two usable forms: a CLI/eval pipeline for LongMemEval, and an **MCP 
 
 ## How HydraDB is used (and what we'd lose without it)
 
-HydraDB stores the entire memory graph and executes every recall. Ingestion writes batched `UNWIND` Cypher over Bolt; the supersession pass is a Cypher `MATCH ... MERGE (new)-[:SUPERSEDES]->(old)`; recall is an entity-anchored traversal returning facts with their supersession history in one query. Reads are snapshot-consistent, and storage is object-store-native, so the memory survives process restarts and scales past RAM.
+HydraDB stores the entire memory graph and executes every recall. Ingestion writes batched `UNWIND` Cypher over Bolt (node upserts, then edge merges between matched nodes); the supersession pass closes the old fact with `MATCH ... SET` and chains it with a batched `MERGE (new)-[:SUPERSEDES]->(old)`; recall is an entity-anchored traversal (`(:Fact)-[:ABOUT]->(:Entity {id})`) with the supersession history fetched per fact. Reads are snapshot-consistent, and storage is object-store-native, so the memory survives process restarts and scales past RAM.
+
+HydraDB executes a deliberate **subset** of OpenCypher (see `cypher-compat.md` in the HydraDB repo), and every statement here is written inside it — the rules that matter (integer node ids sent as Bolt INTs, node creation only via `UNWIND ... MERGE ... SET`, no `MATCH ... MERGE`, no `IN`/`coalesce()`, no label-less `MATCH (n)`) are documented at the top of [`src/hydra.ts`](src/hydra.ts). Human-readable ids (fact hashes, entity names, session ids) are mapped to stable 52-bit integers by [`src/ids.ts`](src/ids.ts) and kept on the node as `key`/`name`. `neo4j-driver` is pinned to `~5.27`: from 5.28 the JS driver uses the Bolt manifest handshake, which HydraDB's server answers in several TCP writes and the driver reads as one — a coin-flip connection failure that `src/hydra.ts` also retries around as a backstop.
 
 Without HydraDB there is no supersession chain to walk, no session-provenance edges, and no structural abstention test — a vector index can return "similar" chunks but cannot represent *"this value replaced that one on this date."* That temporal structure is the whole system.
 
@@ -78,7 +80,8 @@ question ──▶ entity/attribute linking ─┘
 ## Repo layout
 
 ```
-src/hydra.ts       Bolt client (parameterized Cypher) + HTTP fallback
+src/hydra.ts       Bolt client (parameterized Cypher, HydraDB dialect helpers) + HTTP fallback
+src/ids.ts         string keys → stable integer graph ids
 src/extract.ts     LLM fact extraction → deterministic fact ids
 src/ingest.ts      session writes + supersession pass
 src/retrieve.ts    entity linking, traversal, temporal filtering, abstention

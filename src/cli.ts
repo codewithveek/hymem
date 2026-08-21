@@ -5,6 +5,8 @@ import { ingestHistory } from "./ingest.js";
 import { answer } from "./answer.js";
 import { recall } from "./retrieve.js";
 import { cypher, closeHydra } from "./hydra.js";
+import { entityNodeId, factNodeId } from "./ids.js";
+import { canonEntity } from "./extract.js";
 import type { SessionInput } from "./types.js";
 
 const program = new Command();
@@ -53,16 +55,16 @@ program
   .argument("[entity]", "entity name filter, e.g. user")
   .option("--json", "output as JSON")
   .action(async (entity: string | undefined, opts: { json?: boolean }) => {
+    // Entity-anchored by integer id (HydraDB dialect: see src/hydra.ts); f.key is the human-readable fact id.
     const rows = await cypher<{ id: string; text: string; status: string; observed_at: string; session_id: string }>(
       entity
-        ? `MATCH (f:Fact)-[:ABOUT]->(:Entity {name: $entity})
-           OPTIONAL MATCH (f)-[:STATED_IN]->(s:Session)
-           RETURN f.id AS id, f.text AS text, f.status AS status, f.observed_at AS observed_at, s.id AS session_id
+        ? `MATCH (f:Fact)-[:ABOUT]->(e:Entity {id: $eid})
+           RETURN f.key AS id, f.text AS text, f.status AS status, f.observed_at AS observed_at, f.session_id AS session_id
            ORDER BY observed_at`
-        : `MATCH (f:Fact) OPTIONAL MATCH (f)-[:STATED_IN]->(s:Session)
-           RETURN f.id AS id, f.text AS text, f.status AS status, f.observed_at AS observed_at, s.id AS session_id
+        : `MATCH (f:Fact)
+           RETURN f.key AS id, f.text AS text, f.status AS status, f.observed_at AS observed_at, f.session_id AS session_id
            ORDER BY observed_at`,
-      { entity: entity?.toLowerCase() },
+      entity ? { eid: entityNodeId(canonEntity(entity)) } : {},
     );
     if (opts.json) { console.log(JSON.stringify(rows, null, 2)); return; }
     for (const r of rows) console.log(`[${r.status}] ${r.observed_at} · ${r.text}  (id ${r.id}, session ${r.session_id})`);
@@ -74,7 +76,7 @@ program
   .description("Delete facts by id (ids from `hymem inspect`)")
   .argument("<ids...>", "fact ids")
   .action(async (ids: string[]) => {
-    await cypher(`UNWIND $ids AS fid MATCH (f:Fact {id: fid}) DETACH DELETE f`, { ids });
+    for (const fid of ids) await cypher(`MATCH (f:Fact {id: $fid}) DETACH DELETE f`, { fid: factNodeId(fid) });
     console.log(`Deleted ${ids.length} fact(s).`);
   });
 

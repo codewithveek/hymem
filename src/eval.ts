@@ -16,7 +16,7 @@
 import { readFileSync, appendFileSync } from "node:fs";
 import { ingestHistory } from "./ingest.js";
 import { answer, ABSTAIN_ANSWER } from "./answer.js";
-import { closeHydra, cypher } from "./hydra.js";
+import { closeHydra, deleteAll } from "./hydra.js";
 import type { SessionInput } from "./types.js";
 
 interface LmeInstance {
@@ -40,7 +40,9 @@ function adapt(inst: LmeInstance): SessionInput[] {
 }
 
 async function wipeGraph() {
-  await cypher(`MATCH (n) DETACH DELETE n`); // per-instance isolation; fine for a local dev node
+  // Per-instance isolation; fine for a local dev node. HydraDB rejects a
+  // label-less MATCH (n), so this deletes each label this project writes.
+  await deleteAll();
 }
 
 function crudeScore(predicted: string, gold: string): boolean {

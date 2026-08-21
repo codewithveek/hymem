@@ -38,7 +38,9 @@ export async function extractFacts(session: SessionInput): Promise<Fact[]> {
     subject: canonEntity(f.subject),
     attribute: f.attribute.trim().toLowerCase(),
     value: f.value.trim(),
-    entities: [...new Set(f.entities.map(canonEntity))],
+    // The subject is always an entity: recall anchors on it (e.g. "user"), and
+    // extractors routinely list only the *other* named entities.
+    entities: [...new Set([canonEntity(f.subject), ...f.entities.map(canonEntity)])],
     id: factId(f.subject, f.attribute, f.value),
     observedAt: session.ts,
     sessionId: session.id,
