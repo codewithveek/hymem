@@ -1,28 +1,54 @@
 /**
- * Connectivity check: round-trips a write through the HydraDB node.
+ * Connectivity check: round-trips a write through the configured store.
  * "A listening port is not proof the node works; a round-tripped write is."
- * Run this FIRST after starting graph-node (scripts/run-hydra.sh or docker compose).
+ * Run this FIRST after starting a backing service.
  *
- * Uses the exact statement shapes the rest of the project relies on
- * (see the dialect note in src/hydra.ts): UNWIND-MERGE-SET node upsert,
- * MATCH ... RETURN, MATCH ... DETACH DELETE — all with integer ids.
+ * Store-agnostic now: it exercises the MemoryStore contract rather than any
+ * one engine's Cypher, so it works against HydraDB, Neo4j, or the in-memory
+ * store without changes. For a full check of an adapter, run
+ * `hymem conformance`, which is this probe's exhaustive sibling.
  */
-import { cypher, closeHydra, nodeId, upsertNodes } from "./hydra.js";
+import { storeFromEnv } from "./env.js";
+import { factId } from "./core/ids.js";
 
-const id = nodeId("probe:bootstrap");
+const store = storeFromEnv();
+const storeName = process.env.MEM_STORE ?? "hydradb";
+const observedAt = new Date().toISOString();
+const probeId = factId("probe", "bootstrap", observedAt);
 
 try {
-  const ts = new Date().toISOString();
-  await upsertNodes("Probe", [{ id, props: { key: "bootstrap", ts } }]);
-  const rows = await cypher<{ ts: string }>(`MATCH (p:Probe {id: $id}) RETURN p.ts AS ts`, { id });
-  if (rows[0]?.ts !== ts) throw new Error(`probe read back ${JSON.stringify(rows)}, expected ts=${ts}`);
-  console.log(`HydraDB round-trip OK — probe.ts = ${rows[0].ts}`);
-  await cypher(`MATCH (p:Probe {id: $id}) DETACH DELETE p`, { id });
-} catch (e) {
-  console.error("HydraDB round-trip FAILED.");
-  console.error("Checklist: node running? RUST_MIN_STACK=33554432 set? HYDRA_TOKEN matches the node's auth-token file? Bolt auth scheme (see src/hydra.ts note)?");
-  console.error(e);
+  await store.putSession({ id: "bootstrap", ts: observedAt, idx: 0 });
+  await store.putFacts([
+    {
+      id: probeId,
+      subject: "probe",
+      attribute: "bootstrap",
+      value: observedAt,
+      text: "bootstrap probe",
+      entities: ["probe"],
+      observedAt,
+      sessionId: "bootstrap",
+      status: "active",
+      validFrom: observedAt,
+      validTo: null,
+    },
+  ]);
+  await store.linkEntities([{ factId: probeId, entity: "probe" }]);
+
+  const [readBack] = await store.search({ entities: ["probe"], limit: 1 });
+  if (readBack?.value !== observedAt) {
+    throw new Error(`probe read back ${JSON.stringify(readBack)}, expected value=${observedAt}`);
+  }
+  console.log(`${storeName} round-trip OK — probe value = ${readBack.value}`);
+  await store.deleteFacts([probeId]);
+} catch (error) {
+  console.error(`${storeName} round-trip FAILED.`);
+  console.error(
+    "Checklist: service running? RUST_MIN_STACK=33554432 set (HydraDB)? " +
+      "HYDRA_TOKEN matches the node's auth-token file? MEM_STORE pointing at the right engine?",
+  );
+  console.error(error);
   process.exitCode = 1;
 } finally {
-  await closeHydra();
+  await store.close();
 }

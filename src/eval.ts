@@ -7,19 +7,17 @@
  *
  * Flow per instance:
  *   1. adapt haystack sessions -> SessionInput[]
- *   2. ingestHistory(...)          (NOTE: use a fresh graph per instance, or prefix
- *                                   session/entity ids with the question_id to isolate)
- *   3. answer(question)
+ *   2. memory.rememberAll(...)    (the graph is wiped per instance to isolate)
+ *   3. memory.ask(question)
  *   4. score: exact/contains match here; swap in an LLM judge or the official
  *      evaluation script for reported numbers.
  */
 import { readFileSync, appendFileSync } from "node:fs";
-import { ingestHistory } from "./ingest.js";
-import { answer, ABSTAIN_ANSWER } from "./answer.js";
-import { closeHydra, deleteAll } from "./hydra.js";
-import type { SessionInput } from "./types.js";
+import { memoryFromEnv } from "./env.js";
+import { ABSTAIN_ANSWER } from "./core/memory.js";
+import type { SessionInput } from "./core/types.js";
 
-interface LmeInstance {
+interface LongMemEvalInstance {
   question_id: string;
   question_type: string;
   question: string;
@@ -30,54 +28,58 @@ interface LmeInstance {
   haystack_sessions: { role: "user" | "assistant"; content: string }[][];
 }
 
-function adapt(inst: LmeInstance): SessionInput[] {
-  return inst.haystack_sessions.map((turns, i) => ({
-    id: `${inst.question_id}__${inst.haystack_session_ids?.[i] ?? `s${i}`}`,
-    ts: new Date(inst.haystack_dates?.[i] ?? Date.now()).toISOString(),
-    idx: i,
+function adapt(instance: LongMemEvalInstance): SessionInput[] {
+  return instance.haystack_sessions.map((turns, index) => ({
+    id: `${instance.question_id}__${instance.haystack_session_ids?.[index] ?? `s${index}`}`,
+    ts: new Date(instance.haystack_dates?.[index] ?? Date.now()).toISOString(),
+    idx: index,
     turns,
   }));
 }
 
-async function wipeGraph() {
-  // Per-instance isolation; fine for a local dev node. HydraDB rejects a
-  // label-less MATCH (n), so this deletes each label this project writes.
-  await deleteAll();
-}
-
 function crudeScore(predicted: string, gold: string): boolean {
-  const p = predicted.toLowerCase();
-  const g = gold.toLowerCase();
-  return p.includes(g) || (g === "unknown" && p.includes(ABSTAIN_ANSWER.toLowerCase()));
+  const predictedLower = predicted.toLowerCase();
+  const goldLower = gold.toLowerCase();
+  return (
+    predictedLower.includes(goldLower) ||
+    (goldLower === "unknown" && predictedLower.includes(ABSTAIN_ANSWER.toLowerCase()))
+  );
 }
 
 const file = process.argv[2];
-const n = Number(process.argv[3] ?? 25);
+const instanceLimit = Number(process.argv[3] ?? 25);
 if (!file) {
-  console.log("usage: pnpm eval <longmemeval_s.json> [n]");
+  console.log("usage: npm run eval <longmemeval_s.json> [n]");
   process.exit(0);
 }
 
-const instances = (JSON.parse(readFileSync(file, "utf8")) as LmeInstance[]).slice(0, n);
-const byType: Record<string, { correct: number; total: number }> = {};
-let correct = 0;
+const memory = memoryFromEnv();
+const instances = (JSON.parse(readFileSync(file, "utf8")) as LongMemEvalInstance[]).slice(
+  0,
+  instanceLimit,
+);
+const scoreByType: Record<string, { correct: number; total: number }> = {};
+let correctCount = 0;
 
-for (const [i, inst] of instances.entries()) {
-  await wipeGraph();
-  await ingestHistory(adapt(inst));
-  const a = await answer(inst.question);
-  const ok = crudeScore(a.answer, inst.answer);
-  correct += ok ? 1 : 0;
-  byType[inst.question_type] ??= { correct: 0, total: 0 };
-  byType[inst.question_type].total++;
-  if (ok) byType[inst.question_type].correct++;
-  const line = `${ok ? "PASS" : "FAIL"} [${inst.question_type}] ${inst.question_id}: "${a.answer.slice(0, 120)}" vs gold "${inst.answer}"`;
-  console.log(`(${i + 1}/${instances.length}) ${line}`);
+for (const [index, instance] of instances.entries()) {
+  // Per-instance isolation, so haystacks cannot leak into one another.
+  await memory.clear();
+  await memory.rememberAll(adapt(instance));
+  const answered = await memory.ask(instance.question);
+  const isCorrect = crudeScore(answered.answer, instance.answer);
+  correctCount += isCorrect ? 1 : 0;
+  scoreByType[instance.question_type] ??= { correct: 0, total: 0 };
+  scoreByType[instance.question_type].total++;
+  if (isCorrect) scoreByType[instance.question_type].correct++;
+  const line = `${isCorrect ? "PASS" : "FAIL"} [${instance.question_type}] ${instance.question_id}: "${answered.answer.slice(0, 120)}" vs gold "${instance.answer}"`;
+  console.log(`(${index + 1}/${instances.length}) ${line}`);
   appendFileSync("eval-results.log", line + "\n");
 }
 
-console.log(`\nOverall: ${correct}/${instances.length} (${((correct / instances.length) * 100).toFixed(1)}%)`);
-for (const [t, s] of Object.entries(byType)) {
-  console.log(`  ${t}: ${s.correct}/${s.total}`);
+console.log(
+  `\nOverall: ${correctCount}/${instances.length} (${((correctCount / instances.length) * 100).toFixed(1)}%)`,
+);
+for (const [questionType, score] of Object.entries(scoreByType)) {
+  console.log(`  ${questionType}: ${score.correct}/${score.total}`);
 }
-await closeHydra();
+await memory.close();

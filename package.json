@@ -1,15 +1,18 @@
 {
   "name": "hymem",
-  "version": "0.1.0",
-  "description": "Temporal knowledge-graph agent memory on the HydraDB OSS engine — CLI, library, and MCP server",
+  "version": "0.2.0",
+  "description": "Temporal knowledge-graph agent memory with pluggable stores — CLI, library, and MCP server",
   "type": "module",
   "license": "Apache-2.0",
   "keywords": [
     "agent-memory",
-    "hydradb",
+    "memory",
     "knowledge-graph",
     "mcp",
     "temporal",
+    "adapter",
+    "hydradb",
+    "neo4j",
     "longmemeval",
     "ai"
   ],
@@ -22,6 +25,22 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./stores/memory": {
+      "types": "./dist/stores/memory-store.d.ts",
+      "import": "./dist/stores/memory-store.js"
+    },
+    "./stores/cypher": {
+      "types": "./dist/stores/cypher/index.d.ts",
+      "import": "./dist/stores/cypher/index.js"
+    },
+    "./llm": {
+      "types": "./dist/llm/index.d.ts",
+      "import": "./dist/llm/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/conformance.d.ts",
+      "import": "./dist/testing/conformance.js"
     }
   },
   "bin": {
@@ -43,9 +62,10 @@
     "cli": "tsx src/cli.ts",
     "ingest": "tsx src/cli.ts ingest",
     "ask": "tsx src/cli.ts ask",
-    "inspect": "tsx src/cli.ts inspect",
     "eval": "tsx src/eval.ts",
-    "mcp": "tsx src/mcp-server.ts"
+    "mcp": "tsx src/mcp-server.ts",
+    "conformance": "tsx src/testing/run-conformance.ts",
+    "inspect": "tsx src/cli.ts inspect"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.40",

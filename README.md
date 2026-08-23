@@ -1,24 +1,43 @@
 # hymem
 
-**Temporal knowledge-graph agent memory on the [HydraDB](https://github.com/hydra-db/hydradb) OSS engine.**
-Built for Hack Hydra 2026 · Track 03 (Memory and context retrieval).
+**Temporal knowledge-graph agent memory, with pluggable storage.**
+Originally built for Hack Hydra 2026 · Track 03 (Memory and context retrieval).
 
 Agents forget across sessions, and long-context models fail on exactly three things LongMemEval measures: chronology, information that was later overwritten, and knowing when the answer isn't there. hymem treats memory as what it actually is — a **temporal graph** — instead of a bag of embeddings:
 
-- Facts are `(:Fact)` nodes in HydraDB with validity intervals (`valid_from` / `valid_to`).
+- Facts carry validity intervals (`validFrom` / `validTo`), so every value has a lifetime rather than just a latest state.
 - When new information contradicts old information about the same `(subject, attribute)`, the old fact is closed and chained via a `[:SUPERSEDES]` edge — so *"where does the user live?"* and *"where did they live before?"* both have first-class answers.
-- Every fact is linked `[:STATED_IN]` to its source session: inspectable, traceable, deletable. No hidden embeddings.
-- Recall is **graph traversal** (entity-anchored MATCH + temporal filters), and abstention is **structural**: no supporting facts in the graph → "I don't know based on the conversation history," before an LLM ever gets a chance to guess.
+- Every fact is linked to its source session: inspectable, traceable, deletable. No hidden embeddings.
+- Recall is **entity-anchored lookup + temporal filtering**, and abstention is **structural**: no supporting facts → "I don't know based on the conversation history," before an LLM ever gets a chance to guess.
+- **The storage engine is an adapter.** The memory model above is implemented once, against a `MemoryStore` port; HydraDB, Neo4j, Memgraph, and a zero-dependency in-memory store are interchangeable, and any adapter is verifiable against a shipped conformance suite.
 
 It ships in two usable forms: a CLI/eval pipeline for LongMemEval, and an **MCP server** so Claude Code (or any MCP client) gets persistent cross-session memory backed by the graph.
 
-## How HydraDB is used (and what we'd lose without it)
+## Storage adapters
 
-HydraDB stores the entire memory graph and executes every recall. Ingestion writes batched `UNWIND` Cypher over Bolt (node upserts, then edge merges between matched nodes); the supersession pass closes the old fact with `MATCH ... SET` and chains it with a batched `MERGE (new)-[:SUPERSEDES]->(old)`; recall is an entity-anchored traversal (`(:Fact)-[:ABOUT]->(:Entity {id})`) with the supersession history fetched per fact. Reads are snapshot-consistent, and storage is object-store-native, so the memory survives process restarts and scales past RAM.
+The memory model — extraction, fact identity, supersession, bitemporal validity, entity-anchored recall, structural abstention — lives in `src/core/` and knows nothing about any engine. Persistence is a port, `MemoryStore` ([`src/core/ports.ts`](src/core/ports.ts)): about nine methods that speak *facts*, not nodes or rows.
 
-HydraDB executes a deliberate **subset** of OpenCypher (see `cypher-compat.md` in the HydraDB repo), and every statement here is written inside it — the rules that matter (integer node ids sent as Bolt INTs, node creation only via `UNWIND ... MERGE ... SET`, no `MATCH ... MERGE`, no `IN`/`coalesce()`, no label-less `MATCH (n)`) are documented at the top of [`src/hydra.ts`](src/hydra.ts). Human-readable ids (fact hashes, entity names, session ids) are mapped to stable 52-bit integers by [`src/ids.ts`](src/ids.ts) and kept on the node as `key`/`name`. `neo4j-driver` is pinned to `~5.27`: from 5.28 the JS driver uses the Bolt manifest handshake, which HydraDB's server answers in several TCP writes and the driver reads as one — a coin-flip connection failure that `src/hydra.ts` also retries around as a backstop.
+| Store | Import | Needs |
+| --- | --- | --- |
+| In-memory | `hymem` → `memoryStore()` | nothing |
+| HydraDB | `hymem/stores/cypher` → `hydradb()` | a graph-node over Bolt |
+| Neo4j | `hymem/stores/cypher` → `neo4j()` | Neo4j 5.x |
+| Memgraph | `hymem/stores/cypher` → `memgraph()` | Memgraph |
 
-Without HydraDB there is no supersession chain to walk, no session-provenance edges, and no structural abstention test — a vector index can return "similar" chunks but cannot represent *"this value replaced that one on this date."* That temporal structure is the whole system.
+Every adapter is checked against the same executable contract:
+
+```bash
+npm run conformance            # in-memory reference store
+npm run conformance hydradb    # a live HydraDB node
+```
+
+Writing your own adapter is implementing the nine methods and making `runStoreConformance` pass — 15 tests covering round-tripping, supersession, re-activation, idempotent re-ingest, ordering, limits, and deletion semantics. It needs no LLM and no API keys.
+
+### How HydraDB is used
+
+Ingestion writes batched `UNWIND` Cypher over Bolt (node upserts, then edge merges between matched nodes); the supersession pass closes the old fact with `MATCH ... SET` and chains it with a batched `MERGE (new)-[:SUPERSEDES]->(old)`; recall is an entity-anchored traversal (`(:Fact)-[:ABOUT]->(:Entity {id})`). Reads are snapshot-consistent, and storage is object-store-native, so the memory survives process restarts and scales past RAM.
+
+HydraDB executes a deliberate **subset** of OpenCypher (see `cypher-compat.md` in the HydraDB repo), and every statement is written inside it. The rules that matter — integer node ids sent as Bolt INTs, node creation only via `UNWIND ... MERGE ... SET`, no `MATCH ... MERGE`, no `IN`/`coalesce()`, no label-less `MATCH (n)` — are captured as a `Dialect` in [`src/stores/cypher/dialect.ts`](src/stores/cypher/dialect.ts), which is also what lets Neo4j and Memgraph share one implementation. The integer-id mapping is private to the adapter: the rest of hymem only ever sees a fact's string hash. `neo4j-driver` is pinned to `~5.27`: from 5.28 the JS driver uses the Bolt manifest handshake, which HydraDB's server answers in several TCP writes and the driver reads as one — a coin-flip connection failure that [`src/stores/cypher/driver.ts`](src/stores/cypher/driver.ts) also retries around as a backstop.
 
 ## Quick start
 
@@ -61,35 +80,46 @@ Tools: `memory_save`, `memory_recall`, `memory_list`, `memory_forget`. Tool desc
 ## Architecture
 
 ```
-sessions ──▶ LLM extraction ──▶ (subject, attribute, value) triples
-                                      │  batched UNWIND (Bolt, parameterized)
-                                      ▼
-                        ┌──────────────────────────────┐
-                        │        HydraDB graph          │
-                        │ (:Fact)-[:ABOUT]->(:Entity)   │
-                        │ (:Fact)-[:STATED_IN]->(:Session)│
-                        │ (:Fact)-[:SUPERSEDES]->(:Fact)│
-                        └──────────────┬───────────────┘
-                                       │ entity-anchored traversal + temporal filter
-question ──▶ entity/attribute linking ─┘
-                 │ 0 facts → structural abstention
-                 ▼
-        grounded LLM synthesis (chronological, supersession-annotated)
+                    ┌─ Extractor ─┐   ┌─ QueryPlanner ─┐   ┌─ Answerer ─┐
+                    │  (pluggable) │   │  (pluggable)   │   │ (optional) │
+                    └──────┬───────┘   └───────┬────────┘   └─────┬──────┘
+                           │                   │                  │
+sessions ──▶ extract ──▶ facts              question              │
+                           │                   │                  │
+                           ▼                   ▼                  │
+                  ┌────────────────────────────────────┐          │
+                  │   core: ingest · supersede · recall │          │
+                  │      (engine-agnostic algorithms)   │          │
+                  └────────────────┬───────────────────┘          │
+                                   │ MemoryStore port              │
+              ┌────────────────────┼────────────────────┐          │
+              ▼                    ▼                    ▼          │
+        in-memory            HydraDB / Neo4j        your adapter    │
+                                                                    │
+                    0 facts → structural abstention ────────────────┤
+                                                                    ▼
+                                              grounded, supersession-annotated answer
 ```
+
+Four ports, all replaceable: `MemoryStore` (where facts live), `Extractor` (transcript → facts), `QueryPlanner` (question → lookup keys), `Answerer` (context → prose, and omittable — agent authors usually want `recall()` and their own prompt).
 
 ## Repo layout
 
 ```
-src/hydra.ts       Bolt client (parameterized Cypher, HydraDB dialect helpers) + HTTP fallback
-src/ids.ts         string keys → stable integer graph ids
-src/extract.ts     LLM fact extraction → deterministic fact ids
-src/ingest.ts      session writes + supersession pass
-src/retrieve.ts    entity linking, traversal, temporal filtering, abstention
-src/answer.ts      grounded synthesis
-src/mcp-server.ts  MCP tools: save / recall / list / forget
-src/eval.ts        LongMemEval harness
-src/cli.ts         ingest | ask | inspect
-scripts/run-hydra.sh  local graph-node launcher (env from the HydraDB README)
+src/core/types.ts        domain types — no engine, no I/O
+src/core/ports.ts        MemoryStore, Extractor, QueryPlanner, Answerer
+src/core/ingest.ts       session writes + supersession pass (engine-agnostic)
+src/core/recall.ts       temporal filtering, context formatting (engine-agnostic)
+src/core/memory.ts       createMemory() — the public API
+src/core/ids.ts          fact identity + entity canonicalisation
+src/stores/memory-store.ts   zero-dependency reference store
+src/stores/cypher/       Bolt driver, dialects, MemoryStore over a property graph
+src/llm/                 LLM-backed extractor / planner / answerer + JSON repair
+src/testing/conformance.ts   the executable MemoryStore contract
+src/env.ts               the only module that reads process.env (CLI/MCP/eval)
+src/cli.ts               ingest | ask | recall | inspect | forget | conformance
+src/mcp-server.ts        MCP tools: save / recall / list / forget
+src/eval.ts              LongMemEval harness
 ```
 
 ## Known adjustments on first run
@@ -126,12 +156,44 @@ Structured extraction uses `generateObject` with zod schemas, so fact JSON is va
 
 ## Using hymem as a library
 
-```ts
-import { ingestHistory, recall, answer } from "hymem";
+Everything is injected — no globals, no environment reads, no bundled LLM provider. Two memories with different stores can coexist in one process.
 
-await ingestHistory(sessions);
-const r = await recall("Where does the user live now?");
-if (!r.abstained) console.log(r.contextBlock);
+```ts
+import { createMemory } from "hymem";
+import { hydradb } from "hymem/stores/cypher";
+import { openai } from "@ai-sdk/openai";
+
+const memory = createMemory({
+  store: hydradb({ url: "bolt://127.0.0.1:7687", token: process.env.HYDRA_TOKEN }),
+  model: openai("gpt-4o-mini"),
+  abstainThreshold: 1,
+  maxFacts: 24,
+});
+
+await memory.rememberAll(sessions);
+
+const recalled = await memory.recall("Where does the user live now?");
+if (!recalled.abstained) console.log(recalled.contextBlock);
+```
+
+`model` is sugar: it fills the extractor, planner, and answerer with LLM-backed defaults. Override any one of them — a rules-based extractor for PII-sensitive domains, a custom prompt, or no answerer at all:
+
+```ts
+const memory = createMemory({
+  store: memoryStore(),
+  extractor: myRulesExtractor,   // no LLM on the write path
+  planner: llmPlanner(model),
+  answerer: null,                // recall-only; ask() throws
+});
+```
+
+### Writing a store adapter
+
+```ts
+import { runStoreConformance } from "hymem/testing";
+
+const result = await runStoreConformance(() => myStore());
+console.log(`${result.passed} passed, ${result.failed.length} failed`);
 ```
 
 ## Publishing to npm
