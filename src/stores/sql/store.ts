@@ -2,12 +2,12 @@
  * MemoryStore over SQL.
  *
  * Four tables, no graph emulation: facts are rows, entities and supersession
- * are join tables, and recall is a join plus an ORDER BY. That the same nine
+ * are join tables, and recall is a join plus an ORDER BY. That the same ten
  * methods land this naturally on tables and on a property graph is the
  * evidence that the port is at the right altitude.
  */
 import type { MemoryStore, StoreCapabilities } from "../../core/ports.js";
-import type { FactKey, SearchQuery, SessionRecord, StoredFact } from "../../core/types.js";
+import type { SearchQuery, SessionRecord, StoredFact } from "../../core/types.js";
 import type { SqlDriver } from "./driver.js";
 import {
   createTableStatements,
@@ -50,9 +50,10 @@ export function sqlStore(options: SqlStoreOptions): MemoryStore {
 
   const capabilities: StoreCapabilities = {
     vectorSearch: false,
-    // The supersession trio is three statements; wrapping it in a transaction
-    // is a natural next step for this adapter but is not done yet.
-    transactions: false,
+    // True when supersession commits as one unit: a data-modifying CTE
+    // (Postgres) or an explicit transaction (SQLite, or any pooled client that
+    // can pin a connection). A driver with neither is best-effort.
+    atomicSupersede: dialect.dataModifyingCte || driver.transaction !== undefined,
   };
 
   /**
@@ -209,47 +210,58 @@ export function sqlStore(options: SqlStoreOptions): MemoryStore {
       }
     },
 
-    async findSupersedable(key: FactKey & { before: string; excludeId: string }) {
+    async supersede(incoming: StoredFact) {
       await ensureSchema();
-      const binder = newBinder();
-      const rows = await driver.query<{ id: string }>(
-        `SELECT id FROM ${tables.facts}
-         WHERE status = 'active'
-           AND id <> ${binder.bind(key.excludeId)}
-           AND subject = ${binder.bind(key.subject)}
-           AND attribute = ${binder.bind(key.attribute)}
-           AND value <> ${binder.bind(key.value)}
-           AND observed_at < ${binder.bind(key.before)}`,
-        binder.values,
-      );
-      return rows.map((row) => row.id);
-    },
 
-    async closeFacts(factIds: string[], validTo: string) {
-      await ensureSchema();
-      if (factIds.length === 0) return;
-      const binder = newBinder();
-      const validToPlaceholder = binder.bind(validTo);
-      const idList = binder.list(factIds);
-      await driver.query(
+      /** The predicate selecting facts `incoming` overwrites. */
+      const closeClause = (binder: ReturnType<typeof newBinder>) =>
         `UPDATE ${tables.facts}
-         SET status = 'superseded', valid_to = ${validToPlaceholder}
-         WHERE id IN (${idList})`,
-        binder.values,
-      );
-    },
+            SET status = 'superseded', valid_to = ${binder.bind(incoming.observedAt)}
+          WHERE status = 'active'
+            AND id <> ${binder.bind(incoming.id)}
+            AND subject = ${binder.bind(incoming.subject)}
+            AND attribute = ${binder.bind(incoming.attribute)}
+            AND value <> ${binder.bind(incoming.value)}
+            AND observed_at < ${binder.bind(incoming.observedAt)}
+          RETURNING id`;
 
-    async linkSupersedes(newFactId: string, supersededFactIds: string[]) {
-      await ensureSchema();
-      for (const supersededId of supersededFactIds) {
+      // Postgres: close and chain in ONE statement. A data-modifying CTE makes
+      // the whole thing a single atomic unit with no window for a second writer.
+      if (dialect.dataModifyingCte) {
         const binder = newBinder();
-        const values = [binder.bind(newFactId), binder.bind(supersededId)].join(", ");
-        await driver.query(
-          `INSERT INTO ${tables.supersedes} (new_fact_id, old_fact_id) VALUES (${values})
-           ${dialect.insertIgnore(["new_fact_id", "old_fact_id"])}`,
+        const closed = closeClause(binder);
+        const rows = await driver.query<{ old_fact_id: string }>(
+          `WITH closed AS (${closed})
+           INSERT INTO ${tables.supersedes} (new_fact_id, old_fact_id)
+           SELECT ${binder.bind(incoming.id)}, id FROM closed
+           ${dialect.insertIgnore(["new_fact_id", "old_fact_id"])}
+           RETURNING old_fact_id`,
           binder.values,
         );
+        return rows.map((row) => row.old_fact_id);
       }
+
+      // SQLite and friends: two statements, wrapped so they still commit as one.
+      const run = async (transactional: SqlDriver): Promise<string[]> => {
+        const closeBinder = newBinder();
+        const closedRows = await transactional.query<{ id: string }>(
+          closeClause(closeBinder),
+          closeBinder.values,
+        );
+        const supersededIds = closedRows.map((row) => row.id);
+        for (const supersededId of supersededIds) {
+          const linkBinder = newBinder();
+          const values = [linkBinder.bind(incoming.id), linkBinder.bind(supersededId)].join(", ");
+          await transactional.query(
+            `INSERT INTO ${tables.supersedes} (new_fact_id, old_fact_id) VALUES (${values})
+             ${dialect.insertIgnore(["new_fact_id", "old_fact_id"])}`,
+            linkBinder.values,
+          );
+        }
+        return supersededIds;
+      };
+
+      return driver.transaction ? driver.transaction(run) : run(driver);
     },
 
     async search(query: SearchQuery) {

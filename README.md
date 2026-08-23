@@ -15,7 +15,7 @@ It ships in two usable forms: a CLI/eval pipeline for LongMemEval, and an **MCP 
 
 ## Storage adapters
 
-The memory model — extraction, fact identity, supersession, bitemporal validity, entity-anchored recall, structural abstention — lives in `src/core/` and knows nothing about any engine. Persistence is a port, `MemoryStore` ([`src/core/ports.ts`](src/core/ports.ts)): about nine methods that speak *facts*, not nodes or rows.
+The memory model — extraction, fact identity, supersession, bitemporal validity, entity-anchored recall, structural abstention — lives in `src/core/` and knows nothing about any engine. Persistence is a port, `MemoryStore` ([`src/core/ports.ts`](src/core/ports.ts)): ten methods that speak *facts*, not nodes or rows.
 
 | Store | Import | Needs |
 | --- | --- | --- |
@@ -35,7 +35,7 @@ npm run conformance postgres   # a live Postgres
 npm run conformance hydradb    # a live HydraDB node
 ```
 
-All four pass the identical 15 tests. That the same nine methods land naturally on a property graph *and* on four SQL tables is the evidence the port sits at the right altitude.
+All four pass the identical suite. That the same ten methods land naturally on a property graph *and* on four SQL tables is the evidence the port sits at the right altitude.
 
 ### Any ORM, without an adapter per ORM
 
@@ -69,7 +69,20 @@ npm run schema -- --dialect postgres          # or sqlite, and --prefix
 
 `tablePrefix` (default `hymem_`) keeps hymem clear of your own `facts` and `sessions` tables.
 
-Writing your own adapter is implementing the nine methods and making `runStoreConformance` pass — 15 tests covering round-tripping, supersession, re-activation, idempotent re-ingest, ordering, limits, and deletion semantics. It needs no LLM and no API keys.
+Writing your own adapter is implementing the ten methods and making `runStoreConformance` pass — 18 tests covering round-tripping, supersession, re-activation, idempotent re-ingest, ordering, limits, deletion semantics, and concurrency. It needs no LLM and no API keys.
+
+### Supersession is one method, deliberately
+
+`supersede(incoming)` closes the facts a new one overwrites, records the chain, and returns the closed ids — in a single port call rather than find → close → link. Those three steps carry an invariant no caller-sequenced version can hold: between the find and the close, another writer can claim the same slot and both end up `active`. Keeping it inside the port lets each engine enforce it with what it has:
+
+| Store | How | `atomicSupersede` |
+| --- | --- | --- |
+| Postgres | one data-modifying CTE (`WITH closed AS (UPDATE ... RETURNING) INSERT ...`) | yes |
+| SQLite | explicit transaction, serialised (one connection) | yes |
+| In-memory | no `await` in the method body | yes |
+| HydraDB / Neo4j | separate round trips, no transaction exposed | **no** |
+
+Stores that cannot make the guarantee say so, and the conformance suite skips the concurrency test for them rather than letting it pass by accident. A `pg.Pool` is required for the Postgres guarantee — issuing `BEGIN` through a pool is a bug, since each statement may land on a different connection, so the driver pins one via `connect()`.
 
 ### How HydraDB is used
 

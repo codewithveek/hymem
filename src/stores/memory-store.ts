@@ -6,7 +6,7 @@
  * examples so nobody needs a database running to try hymem.
  */
 import type { MemoryStore, StoreCapabilities } from "../core/ports.js";
-import type { FactKey, SearchQuery, SessionRecord, StoredFact } from "../core/types.js";
+import type { SearchQuery, SessionRecord, StoredFact } from "../core/types.js";
 
 const byObservedAtAscending = (earlier: StoredFact, later: StoredFact) =>
   earlier.observedAt.localeCompare(later.observedAt);
@@ -19,7 +19,7 @@ export function memoryStore(): MemoryStore {
   /** fact id -> ids of the facts it superseded */
   const supersededIdsByFactId = new Map<string, Set<string>>();
 
-  const capabilities: StoreCapabilities = { vectorSearch: false, transactions: true };
+  const capabilities: StoreCapabilities = { vectorSearch: false, atomicSupersede: true };
 
   return {
     capabilities,
@@ -49,31 +49,39 @@ export function memoryStore(): MemoryStore {
       }
     },
 
-    async findSupersedable(key: FactKey & { before: string; excludeId: string }) {
-      return [...factsById.values()]
+    /**
+     * Atomic by construction: the body contains no `await`, so it runs to
+     * completion before any other task observes the maps. Nothing can slip
+     * between the scan and the close.
+     */
+    async supersede(incoming: StoredFact) {
+      const supersededIds = [...factsById.values()]
         .filter(
           (storedFact) =>
             storedFact.status === "active" &&
-            storedFact.id !== key.excludeId &&
-            storedFact.subject === key.subject &&
-            storedFact.attribute === key.attribute &&
-            storedFact.value !== key.value &&
-            storedFact.observedAt < key.before,
+            storedFact.id !== incoming.id &&
+            storedFact.subject === incoming.subject &&
+            storedFact.attribute === incoming.attribute &&
+            storedFact.value !== incoming.value &&
+            storedFact.observedAt < incoming.observedAt,
         )
         .map((storedFact) => storedFact.id);
-    },
+      if (supersededIds.length === 0) return [];
 
-    async closeFacts(factIds: string[], validTo: string) {
-      for (const factId of factIds) {
-        const storedFact = factsById.get(factId);
-        if (storedFact) factsById.set(factId, { ...storedFact, status: "superseded", validTo });
+      for (const supersededId of supersededIds) {
+        const storedFact = factsById.get(supersededId);
+        if (storedFact) {
+          factsById.set(supersededId, {
+            ...storedFact,
+            status: "superseded",
+            validTo: incoming.observedAt,
+          });
+        }
       }
-    },
-
-    async linkSupersedes(newFactId: string, supersededFactIds: string[]) {
-      let recorded = supersededIdsByFactId.get(newFactId);
-      if (!recorded) supersededIdsByFactId.set(newFactId, (recorded = new Set()));
-      for (const supersededId of supersededFactIds) recorded.add(supersededId);
+      let recorded = supersededIdsByFactId.get(incoming.id);
+      if (!recorded) supersededIdsByFactId.set(incoming.id, (recorded = new Set()));
+      for (const supersededId of supersededIds) recorded.add(supersededId);
+      return supersededIds;
     },
 
     async search(query: SearchQuery) {

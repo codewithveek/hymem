@@ -60,17 +60,7 @@ async function state(store: MemoryStore, incomingFact: Fact): Promise<void> {
   await store.linkEntities(
     incomingFact.entities.map((entity) => ({ factId: incomingFact.id, entity })),
   );
-  const supersededIds = await store.findSupersedable({
-    subject: incomingFact.subject,
-    attribute: incomingFact.attribute,
-    value: incomingFact.value,
-    before: incomingFact.observedAt,
-    excludeId: incomingFact.id,
-  });
-  if (supersededIds.length) {
-    await store.closeFacts(supersededIds, incomingFact.observedAt);
-    await store.linkSupersedes(incomingFact.id, supersededIds);
-  }
+  await store.supersede(asActive(incomingFact));
 }
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -191,18 +181,68 @@ const TESTS: Test[] = [
     },
   },
   {
-    name: "findSupersedable ignores facts observed at or after the incoming one",
+    name: "supersede ignores facts observed at or after the incoming one",
     run: async (store) => {
       await state(store, fact("user", "home_city", "berlin", AT.session3, "s3"));
       const older = fact("user", "home_city", "lisbon", AT.session1, "s1");
-      const candidates = await store.findSupersedable({
-        subject: "user",
-        attribute: "home_city",
-        value: older.value,
-        before: older.observedAt,
-        excludeId: older.id,
-      });
-      eq(candidates, [], "a fact from the future must not be superseded by an older statement");
+      const closed = await store.supersede(asActive(older));
+      eq(closed, [], "a fact from the future must not be superseded by an older statement");
+      const berlin = (await store.listFacts("user")).find(
+        (storedFact) => storedFact.value === "berlin",
+      );
+      eq(berlin?.status, "active", "the newer fact must remain active");
+    },
+  },
+  {
+    name: "supersede returns the ids it closed",
+    run: async (store) => {
+      const older = fact("user", "home_city", "lisbon", AT.session1, "s1");
+      await state(store, older);
+      const newer = fact("user", "home_city", "berlin", AT.session2, "s2");
+      await store.putSession({ id: newer.sessionId, ts: newer.observedAt, idx: 0 });
+      await store.putFacts([asActive(newer)]);
+      await store.linkEntities(
+        newer.entities.map((entity) => ({ factId: newer.id, entity })),
+      );
+      eq(await store.supersede(asActive(newer)), [older.id], "supersede must return the closed ids");
+    },
+  },
+  {
+    name: "supersede is idempotent",
+    run: async (store) => {
+      const older = fact("user", "home_city", "lisbon", AT.session1, "s1");
+      const newer = fact("user", "home_city", "berlin", AT.session2, "s2");
+      await state(store, older);
+      await state(store, newer);
+      // Second run: the old fact is already closed, so nothing is left to close.
+      eq(await store.supersede(asActive(newer)), [], "re-running supersede must close nothing new");
+      eq(
+        await store.getSupersededBy(newer.id),
+        [{ value: "lisbon", observedAt: AT.session1 }],
+        "re-running supersede must not duplicate the chain",
+      );
+    },
+  },
+  {
+    name: "concurrent supersede leaves exactly one active fact per slot",
+    needs: "atomicSupersede",
+    run: async (store) => {
+      await state(store, fact("user", "home_city", "lisbon", AT.session1, "s1"));
+      const berlin = fact("user", "home_city", "berlin", AT.session2, "s2");
+      const madrid = fact("user", "home_city", "madrid", AT.session3, "s3");
+      // Both writers stage their fact, then race to claim the slot.
+      for (const incoming of [berlin, madrid]) {
+        await store.putSession({ id: incoming.sessionId, ts: incoming.observedAt, idx: 0 });
+        await store.putFacts([asActive(incoming)]);
+        await store.linkEntities(
+          incoming.entities.map((entity) => ({ factId: incoming.id, entity })),
+        );
+      }
+      await Promise.all([store.supersede(asActive(madrid)), store.supersede(asActive(berlin))]);
+      const active = (await store.listFacts("user")).filter(
+        (storedFact) => storedFact.status === "active",
+      );
+      eq(active.map((storedFact) => storedFact.value), ["madrid"], "exactly the newest value should remain active");
     },
   },
   {
@@ -271,9 +311,12 @@ const TESTS: Test[] = [
       eq(await store.getSupersededBy("nope"), [], "unknown fact should return []");
       await store.putFacts([]);
       await store.linkEntities([]);
-      await store.closeFacts([], AT.session1);
-      await store.linkSupersedes("nope", []);
       await store.deleteFacts([]);
+      eq(
+        await store.supersede(asActive(fact("nobody", "nothing", "none", AT.session1, "s1"))),
+        [],
+        "supersede against an empty slot should close nothing",
+      );
     },
   },
 ];

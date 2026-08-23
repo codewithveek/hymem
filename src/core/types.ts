@@ -51,14 +51,6 @@ export interface SessionRecord {
   idx: number;
 }
 
-/** Identity of the slot a fact occupies; two facts sharing one supersede. */
-export interface FactKey {
-  subject: string;
-  attribute: string;
-  /** The incoming value — a stored fact with this same value is NOT supersedable. */
-  value: string;
-}
-
 export interface SearchQuery {
   /** Match facts about ANY of these canonical entity names. */
   entities: string[];

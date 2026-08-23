@@ -28,7 +28,6 @@ export type {
 export type {
   SessionInput,
   Fact,
-  FactKey,
   FactStatus,
   StoredFact,
   RetrievedFact,

@@ -31,17 +31,11 @@ export async function ingestSession(
     facts.flatMap((fact) => fact.entities.map((entity) => ({ factId: fact.id, entity }))),
   );
 
-  for (const incomingFact of facts) {
-    const supersededIds = await store.findSupersedable({
-      subject: incomingFact.subject,
-      attribute: incomingFact.attribute,
-      value: incomingFact.value,
-      before: incomingFact.observedAt,
-      excludeId: incomingFact.id,
-    });
-    if (supersededIds.length === 0) continue;
-    await store.closeFacts(supersededIds, incomingFact.observedAt);
-    await store.linkSupersedes(incomingFact.id, supersededIds);
+  // One call per fact: the store owns closing the old values and recording the
+  // chain, so the window where two writers could both claim a slot stays
+  // inside whatever atomicity the engine offers.
+  for (const storedFact of storedFacts) {
+    await store.supersede(storedFact);
   }
   return facts;
 }

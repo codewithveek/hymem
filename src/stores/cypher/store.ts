@@ -15,7 +15,7 @@
  */
 import { createHash } from "node:crypto";
 import type { MemoryStore, StoreCapabilities } from "../../core/ports.js";
-import type { FactKey, SearchQuery, SessionRecord, StoredFact } from "../../core/types.js";
+import type { SearchQuery, SessionRecord, StoredFact } from "../../core/types.js";
 import { int, type CypherDriver, type Integer } from "./driver.js";
 import { HYDRADB, type Dialect } from "./dialect.js";
 
@@ -59,9 +59,8 @@ export function cypherStore(options: CypherStoreOptions): MemoryStore {
 
   const capabilities: StoreCapabilities = {
     vectorSearch: false,
-    // The find -> close -> link trio is issued as separate statements; no
-    // adapter-level transaction wraps them yet.
-    transactions: false,
+    // See supersede(): separate round trips, no transaction available.
+    atomicSupersede: false,
   };
 
   /**
@@ -251,7 +250,14 @@ export function cypherStore(options: CypherStoreOptions): MemoryStore {
       );
     },
 
-    async findSupersedable(key: FactKey & { before: string; excludeId: string }) {
+    /**
+     * Best-effort, not atomic: HydraDB's Cypher subset has no multi-statement
+     * transaction exposed through this driver, so the read and the writes are
+     * separate round trips. Single-writer ingest is correct; two processes
+     * racing for the same slot can both see it unclaimed.
+     * `capabilities.atomicSupersede` reports this honestly rather than hiding it.
+     */
+    async supersede(incoming: StoredFact) {
       const rows = await driver.run<{ key: string }>(
         `MATCH (old:Fact)
          WHERE old.status = 'active' AND old.id <> $id
@@ -259,35 +265,32 @@ export function cypherStore(options: CypherStoreOptions): MemoryStore {
            AND old.value <> $value AND old.observed_at < $ts
          RETURN old.key AS key`,
         {
-          id: factGraphId(key.excludeId),
-          subject: key.subject,
-          attribute: key.attribute,
-          value: key.value,
-          ts: key.before,
+          id: factGraphId(incoming.id),
+          subject: incoming.subject,
+          attribute: incoming.attribute,
+          value: incoming.value,
+          ts: incoming.observedAt,
         },
       );
-      return rows.map((row) => row.key);
-    },
+      const supersededIds = rows.map((row) => row.key);
+      if (supersededIds.length === 0) return [];
 
-    async closeFacts(factIds: string[], validTo: string) {
-      for (const factId of factIds) {
+      for (const supersededId of supersededIds) {
         await driver.run(
           `MATCH (f:Fact {id: $id}) SET f.status = 'superseded', f.valid_to = $ts`,
-          { id: factGraphId(factId), ts: validTo },
+          { id: factGraphId(supersededId), ts: incoming.observedAt },
         );
       }
-    },
-
-    async linkSupersedes(newFactId: string, supersededFactIds: string[]) {
       await mergeEdges(
         "Fact",
         "SUPERSEDES",
         "Fact",
-        supersededFactIds.map((supersededId) => ({
-          source: factGraphId(newFactId),
+        supersededIds.map((supersededId) => ({
+          source: factGraphId(incoming.id),
           destination: factGraphId(supersededId),
         })),
       );
+      return supersededIds;
     },
 
     async search(query: SearchQuery) {

@@ -22,6 +22,14 @@ export interface SqlDialect {
   keyType: string;
   /** Column type for free text. */
   textType: string;
+  /**
+   * `UPDATE ... RETURNING` may appear inside a CTE that an INSERT then reads,
+   * so supersession is one atomic statement. Postgres has this; SQLite's CTEs
+   * cannot contain UPDATE, so it needs an explicit transaction instead.
+   */
+  dataModifyingCte: boolean;
+  /** `UPDATE`/`DELETE ... RETURNING` is supported (Postgres; SQLite >= 3.35). */
+  returning: boolean;
 }
 
 /** Postgres and SQLite differ only in placeholder style. */
@@ -39,6 +47,8 @@ export const POSTGRES: SqlDialect = {
   integerType: "INTEGER",
   keyType: "TEXT",
   textType: "TEXT",
+  dataModifyingCte: true,
+  returning: true,
 };
 
 export const SQLITE: SqlDialect = {
@@ -49,6 +59,8 @@ export const SQLITE: SqlDialect = {
   integerType: "INTEGER",
   keyType: "TEXT",
   textType: "TEXT",
+  dataModifyingCte: false,
+  returning: true, // SQLite >= 3.35, which is well below Node 22's bundled build
 };
 
 /**

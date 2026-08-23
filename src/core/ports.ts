@@ -3,18 +3,22 @@
  *
  * MemoryStore is the important one: it speaks *facts*, not nodes or rows, so
  * the ingest and recall algorithms in this package never learn what engine is
- * underneath. An adapter is ~9 methods; see `runStoreConformance` in
+ * underneath. An adapter is ten methods; see `runStoreConformance` in
  * src/testing/conformance.ts for the executable definition of correct.
  */
 import type {
-  Fact, FactKey, QueryLink, SearchQuery, SessionInput, SessionRecord, StoredFact,
+  Fact, QueryLink, SearchQuery, SessionInput, SessionRecord, StoredFact,
 } from "./types.js";
 
 export interface StoreCapabilities {
   /** Store can rank by embedding similarity. Recall falls back to entity anchoring when false. */
   vectorSearch: boolean;
-  /** Store can apply the supersession trio (find → close → link) atomically. */
-  transactions: boolean;
+  /**
+   * `supersede()` is atomic — concurrent writers cannot both observe the slot
+   * as unclaimed and leave two active facts behind. False means best-effort:
+   * correct single-writer, racy across processes.
+   */
+  atomicSupersede: boolean;
 }
 
 /**
@@ -48,17 +52,23 @@ export interface MemoryStore {
   linkEntities(links: { factId: string; entity: string }[]): Promise<void>;
 
   /**
-   * Ids of currently-active facts that the incoming fact overwrites: same
-   * subject + attribute, DIFFERENT value, and `observedAt < before`.
-   * Must exclude the incoming fact's own id.
+   * Close every active fact that `incoming` overwrites, record the
+   * supersession, and return the closed ids.
+   *
+   * A fact is overwritten when it shares `subject` + `attribute`, holds a
+   * DIFFERENT `value`, and was observed strictly before `incoming.observedAt`.
+   * The incoming fact's own id is never a candidate. Closing means status
+   * `superseded` and `validTo = incoming.observedAt`. Idempotent: running it
+   * twice closes nothing new and records no duplicate links.
+   *
+   * This is ONE method rather than find → close → link on purpose. Those three
+   * steps carry an invariant no caller-sequenced version can hold: between the
+   * find and the close, another writer can claim the same slot, and both end up
+   * active. Keeping it inside the port lets an engine enforce it — a
+   * data-modifying CTE, `SELECT ... FOR UPDATE`, a transaction — and lets
+   * `capabilities.atomicSupersede` be a claim the store can actually make.
    */
-  findSupersedable(key: FactKey & { before: string; excludeId: string }): Promise<string[]>;
-
-  /** Mark facts superseded and stamp their validTo. */
-  closeFacts(ids: string[], validTo: string): Promise<void>;
-
-  /** Record that `newId` overwrote each of `oldIds`. Idempotent. */
-  linkSupersedes(newId: string, oldIds: string[]): Promise<void>;
+  supersede(incoming: StoredFact): Promise<string[]>;
 
   // --- read path ------------------------------------------------------------
 
