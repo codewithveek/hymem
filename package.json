@@ -14,7 +14,10 @@
     "hydradb",
     "neo4j",
     "longmemeval",
-    "ai"
+    "ai",
+    "postgres",
+    "sqlite",
+    "sql"
   ],
   "engines": {
     "node": ">=22.17"
@@ -41,6 +44,10 @@
     "./testing": {
       "types": "./dist/testing/conformance.d.ts",
       "import": "./dist/testing/conformance.js"
+    },
+    "./stores/sql": {
+      "types": "./dist/stores/sql/index.d.ts",
+      "import": "./dist/stores/sql/index.js"
     }
   },
   "bin": {
@@ -64,8 +71,10 @@
     "ask": "tsx src/cli.ts ask",
     "eval": "tsx src/eval.ts",
     "mcp": "tsx src/mcp-server.ts",
-    "conformance": "tsx src/testing/run-conformance.ts",
-    "inspect": "tsx src/cli.ts inspect"
+    "conformance": "tsx --no-warnings src/testing/run-conformance.ts",
+    "inspect": "tsx src/cli.ts inspect",
+    "sql-checks": "tsx --no-warnings src/testing/run-sql-checks.ts",
+    "schema": "tsx --no-warnings src/cli.ts schema"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.40",
@@ -82,5 +91,14 @@
     "@types/node": "^24.0.0",
     "tsx": "^4.0.0",
     "typescript": "^5.9.0"
+  },
+  "peerDependencies": {
+    "ai": "^7",
+    "pg": "^8"
+  },
+  "peerDependenciesMeta": {
+    "pg": {
+      "optional": true
+    }
   }
 }

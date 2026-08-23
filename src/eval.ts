@@ -53,7 +53,7 @@ if (!file) {
   process.exit(0);
 }
 
-const memory = memoryFromEnv();
+const memory = await memoryFromEnv();
 const instances = (JSON.parse(readFileSync(file, "utf8")) as LongMemEvalInstance[]).slice(
   0,
   instanceLimit,

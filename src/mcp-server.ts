@@ -18,7 +18,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { memoryFromEnv } from "./env.js";
 
-const memory = memoryFromEnv();
+const memory = await memoryFromEnv();
 const server = new McpServer({ name: "hymem", version: "0.2.0" });
 
 server.registerTool(

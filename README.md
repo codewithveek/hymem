@@ -20,6 +20,8 @@ The memory model — extraction, fact identity, supersession, bitemporal validit
 | Store | Import | Needs |
 | --- | --- | --- |
 | In-memory | `hymem` → `memoryStore()` | nothing |
+| SQLite | `hymem/stores/sql` → `sqlite()` | `node:sqlite` (built in) or better-sqlite3 |
+| Postgres | `hymem/stores/sql` → `postgres()` | `pg` |
 | HydraDB | `hymem/stores/cypher` → `hydradb()` | a graph-node over Bolt |
 | Neo4j | `hymem/stores/cypher` → `neo4j()` | Neo4j 5.x |
 | Memgraph | `hymem/stores/cypher` → `memgraph()` | Memgraph |
@@ -28,8 +30,44 @@ Every adapter is checked against the same executable contract:
 
 ```bash
 npm run conformance            # in-memory reference store
+npm run conformance sqlite     # real SQL, no install (node:sqlite)
+npm run conformance postgres   # a live Postgres
 npm run conformance hydradb    # a live HydraDB node
 ```
+
+All four pass the identical 15 tests. That the same nine methods land naturally on a property graph *and* on four SQL tables is the evidence the port sits at the right altitude.
+
+### Any ORM, without an adapter per ORM
+
+The SQL store is written once against a two-method driver seam:
+
+```ts
+interface SqlDriver {
+  dialect: SqlDialect;
+  query<T>(sql: string, params: unknown[]): Promise<T[]>;
+  close(): Promise<void>;
+}
+```
+
+So pg, better-sqlite3, libSQL, D1, Drizzle (`db.execute`) and Prisma (`$queryRawUnsafe`) are each a ~15-line binding, not a new adapter. Pass one with `sql(myDriver)`.
+
+### Who owns the schema
+
+hymem **declares** the schema; you **apply** it. Column names are an implementation detail — hand-writing them into your migration would make them public API, so the definition stays in the adapter and only the application path is yours:
+
+```ts
+postgres({ client: pool, migrate: "check" })  // default: verify, else throw with instructions
+postgres({ client: pool, migrate: "auto" })   // dev: create if absent
+postgres({ client: pool, migrate: "off" })    // you ran the DDL yourself
+```
+
+`"check"` is the default deliberately: it turns `relation "hymem_facts" does not exist` into an error that names the fix. `"auto"` is wrong for ORM users — it desyncs the database from your schema file, so your next `drizzle-kit generate` produces a bogus diff. Get the DDL for your own migration tool with:
+
+```bash
+npm run schema -- --dialect postgres          # or sqlite, and --prefix
+```
+
+`tablePrefix` (default `hymem_`) keeps hymem clear of your own `facts` and `sessions` tables.
 
 Writing your own adapter is implementing the nine methods and making `runStoreConformance` pass — 15 tests covering round-tripping, supersession, re-activation, idempotent re-ingest, ordering, limits, and deletion semantics. It needs no LLM and no API keys.
 
@@ -114,6 +152,7 @@ src/core/memory.ts       createMemory() — the public API
 src/core/ids.ts          fact identity + entity canonicalisation
 src/stores/memory-store.ts   zero-dependency reference store
 src/stores/cypher/       Bolt driver, dialects, MemoryStore over a property graph
+src/stores/sql/          SQL driver seam, dialects, schema ownership, MemoryStore over tables
 src/llm/                 LLM-backed extractor / planner / answerer + JSON repair
 src/testing/conformance.ts   the executable MemoryStore contract
 src/env.ts               the only module that reads process.env (CLI/MCP/eval)

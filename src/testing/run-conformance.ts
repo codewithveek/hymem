@@ -6,6 +6,8 @@
 import { runStoreConformance, CONFORMANCE_TEST_COUNT } from "./conformance.js";
 import { memoryStore } from "../stores/memory-store.js";
 import { hydradb } from "../stores/cypher/index.js";
+import { postgres, sqlite } from "../stores/sql/index.js";
+import { DatabaseSync } from "node:sqlite";
 import type { MemoryStore } from "../core/ports.js";
 
 try {
@@ -16,9 +18,25 @@ try {
 
 // A live-service store is built once and reused; each test clears it first.
 let sharedHydra: MemoryStore | undefined;
+let sharedSqlite: MemoryStore | undefined;
+let sharedPostgres: MemoryStore | undefined;
 
 const STORES: Record<string, () => MemoryStore | Promise<MemoryStore>> = {
   memory: memoryStore,
+  // In-process SQLite via node:sqlite — no install, no service, real SQL.
+  sqlite: () =>
+    (sharedSqlite ??= sqlite({ database: new DatabaseSync(":memory:"), migrate: "auto" })),
+  // Postgres over `pg`. PG_URL points at a throwaway database.
+  postgres: async () => {
+    if (!sharedPostgres) {
+      const { Pool } = await import("pg");
+      const pool = new Pool({
+        connectionString: process.env.PG_URL ?? "postgres://postgres:hymem@127.0.0.1:55432/hymem",
+      });
+      sharedPostgres = postgres({ client: pool, migrate: "auto" });
+    }
+    return sharedPostgres;
+  },
   hydradb: () =>
     (sharedHydra ??= hydradb({
       url: process.env.HYDRA_BOLT_URL ?? "neo4j://127.0.0.1:7687",
@@ -39,4 +57,5 @@ console.log(
   `\n${result.passed} passed, ${result.failed.length} failed, ${result.skipped.length} skipped`,
 );
 await sharedHydra?.close();
+await sharedPostgres?.close();
 process.exit(result.failed.length === 0 ? 0 : 1);

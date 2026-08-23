@@ -52,16 +52,22 @@ export function modelFromEnv(): LanguageModel {
 /**
  * Build the configured store.
  *
- * MEM_STORE: hydradb (default) | neo4j | memgraph | memory.
- * "memory" needs no services at all, which makes it the right default for
+ * MEM_STORE: hydradb (default) | neo4j | memgraph | postgres | sqlite | memory.
+ * "memory" needs no services at all, which makes it the right choice for
  * trying the CLI before standing anything up.
+ *
+ * Async because the SQL adapters import their driver on demand: `pg` and
+ * `better-sqlite3` are optional here, so someone running against HydraDB never
+ * has to install them.
  */
-export function storeFromEnv(): MemoryStore {
+export async function storeFromEnv(): Promise<MemoryStore> {
   const kind = process.env.MEM_STORE ?? "hydradb";
   const url = process.env.HYDRA_BOLT_URL ?? process.env.BOLT_URL;
   const token = process.env.HYDRA_TOKEN ?? "local-development-token-32-bytes";
   const user = process.env.BOLT_USER;
   const password = process.env.BOLT_PASSWORD;
+  const migrate = (process.env.MEM_MIGRATE ?? "check") as "check" | "auto" | "off";
+  const tablePrefix = process.env.MEM_TABLE_PREFIX;
 
   switch (kind) {
     case "memory":
@@ -72,16 +78,36 @@ export function storeFromEnv(): MemoryStore {
       return memgraph({ url, user, password, token });
     case "hydradb":
       return hydradb({ url, token });
+    case "postgres": {
+      const { postgres } = await import("./stores/sql/index.js");
+      const { Pool } = await import("pg");
+      const connectionString = process.env.DATABASE_URL ?? process.env.PG_URL;
+      if (!connectionString) {
+        throw new Error('MEM_STORE=postgres needs DATABASE_URL (or PG_URL) to be set.');
+      }
+      return postgres({ client: new Pool({ connectionString }), migrate, tablePrefix });
+    }
+    case "sqlite": {
+      const { sqlite } = await import("./stores/sql/index.js");
+      const { DatabaseSync } = await import("node:sqlite");
+      return sqlite({
+        database: new DatabaseSync(process.env.SQLITE_PATH ?? "hymem.db"),
+        migrate,
+        tablePrefix,
+      });
+    }
     default:
       throw new Error(
-        `Unknown MEM_STORE "${kind}". Expected: hydradb, neo4j, memgraph, or memory.`,
+        `Unknown MEM_STORE "${kind}". Expected: hydradb, neo4j, memgraph, postgres, sqlite, or memory.`,
       );
   }
 }
 
-export function memoryFromEnv(overrides: Partial<Parameters<typeof createMemory>[0]> = {}): Memory {
+export async function memoryFromEnv(
+  overrides: Partial<Parameters<typeof createMemory>[0]> = {},
+): Promise<Memory> {
   return createMemory({
-    store: storeFromEnv(),
+    store: await storeFromEnv(),
     model: modelFromEnv(),
     maxFacts: Number(process.env.MEM_MAX_FACTS ?? 24),
     abstainThreshold: Number(process.env.MEM_ABSTAIN_THRESHOLD ?? 1),

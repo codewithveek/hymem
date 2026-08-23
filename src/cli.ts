@@ -6,7 +6,7 @@ import { runStoreConformance, CONFORMANCE_TEST_COUNT } from "./testing/conforman
 import { storeFromEnv } from "./env.js";
 import type { SessionInput } from "./core/types.js";
 
-const memory = memoryFromEnv();
+const memory = await memoryFromEnv();
 
 const program = new Command();
 
@@ -86,7 +86,7 @@ program
   .command("conformance")
   .description("Verify the configured store against the MemoryStore contract")
   .action(async () => {
-    const store = storeFromEnv();
+    const store = await storeFromEnv();
     console.log(`Running ${CONFORMANCE_TEST_COUNT} conformance tests against ${process.env.MEM_STORE ?? "hydradb"}:\n`);
     const result = await runStoreConformance(() => store, { verbose: true });
     console.log(
@@ -94,6 +94,23 @@ program
     );
     await store.close();
     if (result.failed.length > 0) process.exitCode = 1;
+  });
+
+program
+  .command("schema")
+  .description("Print the SQL DDL for a store, to apply through your own migration tool")
+  .option("--dialect <name>", "postgres | sqlite", "postgres")
+  .option("--prefix <prefix>", "table-name prefix", "hymem_")
+  .action(async (options: { dialect: string; prefix: string }) => {
+    const { schemaScript, POSTGRES, SQLITE } = await import("./stores/sql/index.js");
+    const dialects = { postgres: POSTGRES, sqlite: SQLITE };
+    const dialect = dialects[options.dialect as keyof typeof dialects];
+    if (!dialect) {
+      console.error(`Unknown dialect "${options.dialect}". Expected: postgres or sqlite.`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(schemaScript(dialect, options.prefix));
   });
 
 program.parseAsync().catch((error) => {

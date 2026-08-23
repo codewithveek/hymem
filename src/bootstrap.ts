@@ -11,7 +11,7 @@
 import { storeFromEnv } from "./env.js";
 import { factId } from "./core/ids.js";
 
-const store = storeFromEnv();
+const store = await storeFromEnv();
 const storeName = process.env.MEM_STORE ?? "hydradb";
 const observedAt = new Date().toISOString();
 const probeId = factId("probe", "bootstrap", observedAt);
