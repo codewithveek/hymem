@@ -18,5 +18,14 @@ export interface CypherDriver {
    * ships separately.
    */
   int(value: number): unknown;
+  /**
+   * Run `body` inside a single write transaction, rolling back on throw.
+   *
+   * Optional: a driver whose engine exposes no multi-statement transaction
+   * omits it, and the store falls back to separate round trips and reports
+   * `atomicSupersede: false` rather than pretending. Neo4j and Memgraph have
+   * this; HydraDB's Cypher subset does not.
+   */
+  transaction?<T>(body: (tx: CypherDriver) => Promise<T>): Promise<T>;
   close(): Promise<void>;
 }

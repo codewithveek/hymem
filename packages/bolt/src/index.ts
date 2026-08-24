@@ -25,6 +25,14 @@ export interface BoltOptions {
   /** Basic auth as an alternative to bearer. */
   user?: string;
   password?: string;
+  /**
+   * Whether the server supports explicit write transactions.
+   *
+   * Neo4j and Memgraph do. HydraDB's Cypher subset does not, and issuing BEGIN
+   * against it fails, so the factories below set this per engine rather than
+   * probing at runtime.
+   */
+  transactions?: boolean;
 }
 
 /**
@@ -73,7 +81,15 @@ export function boltDriver(options: BoltOptions): CypherDriver {
     return driver;
   };
 
-  return {
+  const asRows = <T>(result: { records: { keys: PropertyKey[]; get(key: never): unknown }[] }): T[] =>
+    result.records.map(
+      (record) =>
+        Object.fromEntries(
+          (record.keys as string[]).map((column) => [column, record.get(column as never)]),
+        ) as T,
+    );
+
+  const boltDriverInstance: CypherDriver = {
     // A plain JS number packs as FLOAT over Bolt and is rejected as a node id.
     int: (value: number) => neo4j.int(value),
 
@@ -106,6 +122,35 @@ export function boltDriver(options: BoltOptions): CypherDriver {
       driver = null;
     },
   };
+
+  if (options.transactions) {
+    /**
+     * One managed write transaction. `executeWrite` also retries on the
+     * transient errors Neo4j raises under contention, which is exactly the
+     * case this exists to handle — so the retry is a feature, not incidental.
+     */
+    boltDriverInstance.transaction = async function transaction<T>(
+      body: (tx: CypherDriver) => Promise<T>,
+    ): Promise<T> {
+      const session = getDriver().session();
+      try {
+        return await session.executeWrite(async (tx) => {
+          const scoped: CypherDriver = {
+            int: boltDriverInstance.int,
+            async run<R>(query: string, params: Record<string, unknown> = {}): Promise<R[]> {
+              return asRows<R>(await tx.run(query, params));
+            },
+            async close() {},
+          };
+          return body(scoped);
+        });
+      } finally {
+        await session.close().catch(() => undefined);
+      }
+    };
+  }
+
+  return boltDriverInstance;
 }
 
 export interface BoltConnectOptions extends Partial<BoltOptions> {
@@ -122,17 +167,23 @@ function connect(
   return cypherStore({ driver, dialect });
 }
 
-/** HydraDB over Bolt. Token auth by default; pass user/password for basic auth. */
+/**
+ * HydraDB over Bolt. Token auth by default; pass user/password for basic auth.
+ *
+ * `atomicSupersede` is false here: HydraDB's Cypher subset exposes no
+ * multi-statement transaction, so concurrent writers can race for one
+ * (subject, attribute) slot. Single-writer ingest is correct.
+ */
 export const hydradb = (options: BoltConnectOptions = {}): MemoryStore =>
-  connect(options, HYDRADB, "neo4j://127.0.0.1:7687");
+  connect({ transactions: false, ...options }, HYDRADB, "neo4j://127.0.0.1:7687");
 
-/** Neo4j 5.x over Bolt. */
+/** Neo4j 5.x over Bolt. Supersession runs in one managed write transaction. */
 export const neo4jStore = (options: BoltConnectOptions = {}): MemoryStore =>
-  connect(options, NEO4J, "neo4j://127.0.0.1:7687");
+  connect({ transactions: true, ...options }, NEO4J, "neo4j://127.0.0.1:7687");
 
-/** Memgraph over Bolt. */
+/** Memgraph over Bolt. Supersession runs in one managed write transaction. */
 export const memgraph = (options: BoltConnectOptions = {}): MemoryStore =>
-  connect(options, MEMGRAPH, "bolt://127.0.0.1:7687");
+  connect({ transactions: true, ...options }, MEMGRAPH, "bolt://127.0.0.1:7687");
 
 export { HYDRADB, NEO4J, MEMGRAPH } from "hymem/stores/cypher";
 export type { CypherDriver, Dialect } from "hymem/stores/cypher";

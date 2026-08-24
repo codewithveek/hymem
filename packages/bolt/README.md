@@ -29,8 +29,15 @@ manifest handshake, which HydraDB answers in several TCP writes and the driver
 reads as one — a coin-flip connection failure. The driver retries around it as a
 backstop if you bump the pin.
 
-`atomicSupersede` is **false** here: the Cypher subset exposes no multi-statement
-transaction through this driver, so concurrent writers racing for one
-`(subject, attribute)` slot can both see it unclaimed. Single-writer ingest is
-correct. The conformance suite skips the concurrency test rather than letting it
-pass by accident.
+`atomicSupersede` differs by engine, because the engines differ:
+
+| Factory | Supersession | `atomicSupersede` |
+| --- | --- | --- |
+| `neo4jStore()` | one managed write transaction (`executeWrite`) | **true** |
+| `memgraph()` | one managed write transaction | **true** |
+| `hydradb()` | separate round trips — no transaction in its Cypher subset | **false** |
+
+Under `hydradb()`, two writers racing for the same `(subject, attribute)` slot
+can both see it unclaimed and both stay active. Single-writer ingest is correct.
+The conformance suite skips the concurrency test for it rather than letting it
+pass by accident — and runs it for Neo4j, where it must pass.

@@ -5,7 +5,7 @@
  */
 import { runStoreConformance, CONFORMANCE_TEST_COUNT } from "hymem/testing";
 import { memoryStore, type MemoryStore } from "hymem";
-import { hydradb } from "@hymem/bolt";
+import { hydradb, neo4jStore } from "@hymem/bolt";
 import { postgres } from "@hymem/postgres";
 import { sqlite } from "@hymem/sqlite";
 import { DatabaseSync } from "node:sqlite";
@@ -18,6 +18,7 @@ try {
 
 // A live-service store is built once and reused; each test clears it first.
 let sharedHydra: MemoryStore | undefined;
+let sharedNeo4j: MemoryStore | undefined;
 let sharedSqlite: MemoryStore | undefined;
 let sharedPostgres: MemoryStore | undefined;
 
@@ -37,6 +38,13 @@ const STORES: Record<string, () => MemoryStore | Promise<MemoryStore>> = {
     }
     return sharedPostgres;
   },
+  // Neo4j exercises the transactional supersede path that HydraDB cannot offer.
+  neo4j: () =>
+    (sharedNeo4j ??= neo4jStore({
+      url: process.env.NEO4J_URL ?? "bolt://127.0.0.1:7688",
+      user: process.env.NEO4J_USER ?? "neo4j",
+      password: process.env.NEO4J_PASSWORD ?? "hymempass",
+    })),
   hydradb: () =>
     (sharedHydra ??= hydradb({
       url: process.env.HYDRA_BOLT_URL ?? "neo4j://127.0.0.1:7687",
@@ -57,5 +65,6 @@ console.log(
   `\n${result.passed} passed, ${result.failed.length} failed, ${result.skipped.length} skipped`,
 );
 await sharedHydra?.close();
+await sharedNeo4j?.close();
 await sharedPostgres?.close();
 process.exit(result.failed.length === 0 ? 0 : 1);

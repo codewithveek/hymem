@@ -43,10 +43,11 @@ Every adapter is checked against the same executable contract:
 npm run conformance            # in-memory reference store
 npm run conformance sqlite     # real SQL, no install (node:sqlite)
 npm run conformance postgres   # a live Postgres
+npm run conformance neo4j      # a live Neo4j
 npm run conformance hydradb    # a live HydraDB node
 ```
 
-All four pass the identical suite. That the same ten methods land naturally on a property graph *and* on four SQL tables is the evidence the port sits at the right altitude.
+All five pass the identical suite. That the same ten methods land naturally on a property graph *and* on four SQL tables is the evidence the port sits at the right altitude.
 
 ## Tenancy
 
@@ -146,8 +147,9 @@ Writing your own adapter is implementing the ten methods and making `runStoreCon
 | --- | --- | --- |
 | Postgres | one data-modifying CTE (`WITH closed AS (UPDATE ... RETURNING) INSERT ...`) | yes |
 | SQLite | explicit transaction, serialised (one connection) | yes |
+| Neo4j / Memgraph | one managed write transaction (`executeWrite`) | yes |
 | In-memory | no `await` in the method body | yes |
-| HydraDB / Neo4j | separate round trips, no transaction exposed | **no** |
+| HydraDB | separate round trips — no transaction in its Cypher subset | **no** |
 
 Stores that cannot make the guarantee say so, and the conformance suite skips the concurrency test for them rather than letting it pass by accident. A `pg.Pool` is required for the Postgres guarantee — issuing `BEGIN` through a pool is a bug, since each statement may land on a different connection, so the driver pins one via `connect()`.
 
