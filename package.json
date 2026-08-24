@@ -1,23 +1,25 @@
 {
   "name": "hymem",
-  "version": "0.2.0",
-  "description": "Temporal knowledge-graph agent memory with pluggable stores — CLI, library, and MCP server",
+  "version": "0.3.0",
+  "description": "Multi-tenant temporal knowledge-graph agent memory with pluggable stores \u2014 CLI, library, and MCP server",
   "type": "module",
   "license": "Apache-2.0",
   "keywords": [
-    "agent-memory",
-    "memory",
-    "knowledge-graph",
-    "mcp",
-    "temporal",
     "adapter",
-    "hydradb",
-    "neo4j",
-    "longmemeval",
+    "agent-memory",
     "ai",
+    "hydradb",
+    "knowledge-graph",
+    "longmemeval",
+    "mcp",
+    "memory",
+    "multi-tenant",
+    "neo4j",
     "postgres",
+    "sql",
     "sqlite",
-    "sql"
+    "temporal",
+    "tenancy"
   ],
   "engines": {
     "node": ">=22.17"
@@ -74,7 +76,9 @@
     "conformance": "tsx --no-warnings src/testing/run-conformance.ts",
     "inspect": "tsx src/cli.ts inspect",
     "sql-checks": "tsx --no-warnings src/testing/run-sql-checks.ts",
-    "schema": "tsx --no-warnings src/cli.ts schema"
+    "schema": "tsx --no-warnings src/cli.ts schema",
+    "tenancy-checks": "tsx --no-warnings src/testing/run-tenancy-checks.ts",
+    "check": "npm run typecheck && npm run conformance memory && npm run conformance sqlite && npm run sql-checks && npm run tenancy-checks"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.40",

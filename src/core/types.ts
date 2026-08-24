@@ -11,12 +11,34 @@ export interface SessionInput {
   /** Zero-based position in the history. */
   idx: number;
   turns: { role: "user" | "assistant"; content: string }[];
+  /**
+   * Stable identity of the human in this transcript — whatever your auth
+   * system already uses ("alice", "usr_7f3a91"). hymem never generates one.
+   *
+   * Facts the extractor attributes to the speaker are re-subjected to this
+   * value. Needed only when several people share a namespace: with one person
+   * per namespace the namespace already IS the identity, so leave it unset and
+   * the speaker token stays literal.
+   */
+  speaker?: string;
+  /**
+   * Human-readable alias for `speaker`, linked alongside it as an entity so
+   * name-based recall ("what did Bob decide?") still resolves to facts keyed
+   * by an opaque id. Identity stays the id; this is only a lookup alias.
+   */
+  speakerName?: string;
 }
 
 /** A distilled triple-shaped fact, as produced by an Extractor. */
 export interface Fact {
-  /** Deterministic hash(subject|attribute|value) — re-stating a fact reuses this id. */
+  /**
+   * Deterministic hash(namespace|subject|attribute|value) — re-stating a fact
+   * reuses this id. Assigned by core, not by the extractor: the speaker rewrite
+   * happens first, so only core knows the final subject.
+   */
   id: string;
+  /** Tenant boundary. The same triple in two namespaces is two separate facts. */
+  namespace: string;
   /** Canonical entity the fact is about, e.g. "user". */
   subject: string;
   /** snake_case slot, e.g. "home_city". Collisions on (subject, attribute) drive supersession. */
@@ -49,9 +71,12 @@ export interface SessionRecord {
   id: string;
   ts: string;
   idx: number;
+  speaker?: string;
 }
 
 export interface SearchQuery {
+  /** Tenant boundary. Never match outside it. */
+  namespace: string;
   /** Match facts about ANY of these canonical entity names. */
   entities: string[];
   /** If non-empty, additionally require the attribute to be ANY of these. */

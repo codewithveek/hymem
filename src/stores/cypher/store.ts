@@ -29,6 +29,7 @@ const LABELS = ["Fact", "Entity", "Session"] as const;
 
 interface FactRow {
   key: string;
+  namespace: string;
   subject: string;
   attribute: string;
   value: string;
@@ -73,9 +74,14 @@ export function cypherStore(options: CypherStoreOptions): MemoryStore {
     return int(parseInt(hex, 16));
   };
 
+  // Fact ids already embed the namespace (core hashes it in). Entity and
+  // session keys do NOT, so they are scoped here — otherwise two tenants would
+  // share one (:Entity {name: "user"}) node and their facts would interlink.
   const factGraphId = (factId: string) => graphId("fact", factId);
-  const entityGraphId = (entityName: string) => graphId("entity", entityName);
-  const sessionGraphId = (sessionId: string) => graphId("session", sessionId);
+  const entityGraphId = (namespace: string, entityName: string) =>
+    graphId("entity", `${namespace}\u0000${entityName}`);
+  const sessionGraphId = (namespace: string, sessionId: string) =>
+    graphId("session", `${namespace}\u0000${sessionId}`);
 
   /**
    * Idempotent node upsert. Rows are grouped by their set of defined property
@@ -134,7 +140,7 @@ export function cypherStore(options: CypherStoreOptions): MemoryStore {
     );
   }
 
-  const FACT_RETURN = `f.key AS key, f.subject AS subject, f.attribute AS attribute,
+  const FACT_RETURN = `f.key AS key, f.namespace AS namespace, f.subject AS subject, f.attribute AS attribute,
        f.value AS value, f.text AS text, f.observed_at AS observed_at,
        f.session_id AS session_id, f.status AS status,
        f.valid_from AS valid_from, f.valid_to AS valid_to,
@@ -142,6 +148,7 @@ export function cypherStore(options: CypherStoreOptions): MemoryStore {
 
   const toStoredFact = (row: FactRow): StoredFact => ({
     id: row.key,
+    namespace: row.namespace,
     subject: row.subject,
     attribute: row.attribute,
     value: row.value,
@@ -160,23 +167,31 @@ export function cypherStore(options: CypherStoreOptions): MemoryStore {
   return {
     capabilities,
 
-    async putSession(session: SessionRecord, previousSessionId?: string) {
+    async putSession(namespace: string, session: SessionRecord, previousSessionId?: string) {
       await upsertNodes("Session", [
         {
-          id: sessionGraphId(session.id),
+          id: sessionGraphId(namespace, session.id),
           properties: {
             key: session.id,
+            namespace,
             ts: session.ts,
             idx: dialect.integerIds ? int(session.idx) : session.idx,
+            speaker: session.speaker,
           },
         },
       ]);
       if (previousSessionId) {
         await upsertNodes("Session", [
-          { id: sessionGraphId(previousSessionId), properties: { key: previousSessionId } },
+          {
+            id: sessionGraphId(namespace, previousSessionId),
+            properties: { key: previousSessionId, namespace },
+          },
         ]);
         await mergeEdges("Session", "NEXT", "Session", [
-          { source: sessionGraphId(previousSessionId), destination: sessionGraphId(session.id) },
+          {
+            source: sessionGraphId(namespace, previousSessionId),
+            destination: sessionGraphId(namespace, session.id),
+          },
         ]);
       }
     },
@@ -189,6 +204,7 @@ export function cypherStore(options: CypherStoreOptions): MemoryStore {
           id: factGraphId(incomingFact.id),
           properties: {
             key: incomingFact.id,
+            namespace: incomingFact.namespace,
             subject: incomingFact.subject,
             attribute: incomingFact.attribute,
             value: incomingFact.value,
@@ -210,12 +226,13 @@ export function cypherStore(options: CypherStoreOptions): MemoryStore {
       }
       // Provenance edge. Sessions are upserted by putSession, but a caller may
       // write facts for a session the store has not seen, so ensure the node.
+      const namespace = incomingFacts[0].namespace;
       const sessionIds = [...new Set(incomingFacts.map((incomingFact) => incomingFact.sessionId))];
       await upsertNodes(
         "Session",
         sessionIds.map((sessionId) => ({
-          id: sessionGraphId(sessionId),
-          properties: { key: sessionId },
+          id: sessionGraphId(namespace, sessionId),
+          properties: { key: sessionId, namespace },
         })),
       );
       await mergeEdges(
@@ -224,19 +241,19 @@ export function cypherStore(options: CypherStoreOptions): MemoryStore {
         "Session",
         incomingFacts.map((incomingFact) => ({
           source: factGraphId(incomingFact.id),
-          destination: sessionGraphId(incomingFact.sessionId),
+          destination: sessionGraphId(incomingFact.namespace, incomingFact.sessionId),
         })),
       );
     },
 
-    async linkEntities(links) {
+    async linkEntities(namespace: string, links) {
       if (links.length === 0) return;
       const entityNames = [...new Set(links.map((link) => link.entity))];
       await upsertNodes(
         "Entity",
         entityNames.map((entityName) => ({
-          id: entityGraphId(entityName),
-          properties: { name: entityName },
+          id: entityGraphId(namespace, entityName),
+          properties: { name: entityName, namespace },
         })),
       );
       await mergeEdges(
@@ -245,7 +262,7 @@ export function cypherStore(options: CypherStoreOptions): MemoryStore {
         "Entity",
         links.map((link) => ({
           source: factGraphId(link.factId),
-          destination: entityGraphId(link.entity),
+          destination: entityGraphId(namespace, link.entity),
         })),
       );
     },
@@ -260,11 +277,12 @@ export function cypherStore(options: CypherStoreOptions): MemoryStore {
     async supersede(incoming: StoredFact) {
       const rows = await driver.run<{ key: string }>(
         `MATCH (old:Fact)
-         WHERE old.status = 'active' AND old.id <> $id
+         WHERE old.namespace = $namespace AND old.status = 'active' AND old.id <> $id
            AND old.subject = $subject AND old.attribute = $attribute
            AND old.value <> $value AND old.observed_at < $ts
          RETURN old.key AS key`,
         {
+          namespace: incoming.namespace,
           id: factGraphId(incoming.id),
           subject: incoming.subject,
           attribute: incoming.attribute,
@@ -296,10 +314,12 @@ export function cypherStore(options: CypherStoreOptions): MemoryStore {
     async search(query: SearchQuery) {
       const attributes = query.attributes ?? [];
       // No IN on HydraDB, so an attribute filter is an OR chain of equalities.
+      // A WHERE clause is always present now (the namespace check), so the
+      // attribute filter is appended with AND rather than opening its own.
       const attributeFilter = attributes.length
         ? dialect.supportsIn
-          ? `WHERE f.attribute IN $attrs`
-          : `WHERE ${attributes.map((_, index) => `f.attribute = $a${index}`).join(" OR ")}`
+          ? `AND f.attribute IN $attrs`
+          : `AND (${attributes.map((_, index) => `f.attribute = $a${index}`).join(" OR ")})`
         : "";
       const attributeParams = dialect.supportsIn
         ? attributes.length
@@ -313,11 +333,14 @@ export function cypherStore(options: CypherStoreOptions): MemoryStore {
       const matches: StoredFact[] = [];
       for (const entityName of query.entities) {
         const rows = await driver.run<FactRow>(
-          `MATCH (f:Fact)-[:ABOUT]->(e:Entity {id: $eid}) ${attributeFilter}
+          // The entity node id is already namespace-scoped; the property check
+          // is defence in depth, so a hash collision cannot cross tenants.
+          `MATCH (f:Fact)-[:ABOUT]->(e:Entity {id: $eid})
+           WHERE f.namespace = $namespace ${attributeFilter}
            RETURN ${FACT_RETURN}
            ORDER BY observed_at DESC
            LIMIT ${Math.max(1, Math.floor(query.limit))}`,
-          { eid: entityGraphId(entityName), ...attributeParams },
+          { eid: entityGraphId(query.namespace, entityName), namespace: query.namespace, ...attributeParams },
         );
         for (const row of rows) {
           if (seenFactIds.has(row.key)) continue;
@@ -329,38 +352,53 @@ export function cypherStore(options: CypherStoreOptions): MemoryStore {
       return matches.slice(Math.max(0, matches.length - query.limit));
     },
 
-    async getSupersededBy(factId: string) {
+    async getSupersededBy(namespace: string, factId: string) {
       const rows = await driver.run<{ value: string; observed_at: string }>(
         `MATCH (f:Fact {id: $id})-[:SUPERSEDES]->(o:Fact)
+         WHERE o.namespace = $namespace
          RETURN o.value AS value, o.observed_at AS observed_at`,
-        { id: factGraphId(factId) },
+        { id: factGraphId(factId), namespace },
       );
       return rows.map((row) => ({ value: row.value, observedAt: row.observed_at }));
     },
 
-    async listFacts(entityName?: string) {
+    async listFacts(namespace: string, entityName?: string) {
       const rows = await driver.run<FactRow>(
         entityName
           ? `MATCH (f:Fact)-[:ABOUT]->(e:Entity {id: $eid})
+             WHERE f.namespace = $namespace
              RETURN ${FACT_RETURN}
              ORDER BY observed_at`
           : `MATCH (f:Fact)
+             WHERE f.namespace = $namespace
              RETURN ${FACT_RETURN}
              ORDER BY observed_at`,
-        entityName ? { eid: entityGraphId(entityName) } : {},
+        entityName
+          ? { eid: entityGraphId(namespace, entityName), namespace }
+          : { namespace },
       );
       return rows.map(toStoredFact).sort(byObservedAtAscending);
     },
 
-    async deleteFacts(factIds: string[]) {
+    async deleteFacts(namespace: string, factIds: string[]) {
       for (const factId of factIds) {
+        // The id predicate cannot carry the namespace check (HydraDB has no
+        // AND in a node pattern), so verify ownership before deleting.
+        const owned = await driver.run<{ key: string }>(
+          `MATCH (f:Fact {id: $id}) WHERE f.namespace = $namespace RETURN f.key AS key`,
+          { id: factGraphId(factId), namespace },
+        );
+        if (owned.length === 0) continue;
         await driver.run(`MATCH (f:Fact {id: $id}) DETACH DELETE f`, { id: factGraphId(factId) });
       }
     },
 
-    async clear() {
+    /** Scoped wipe: other tenants in this graph are untouched. */
+    async clear(namespace: string) {
       for (const label of LABELS) {
-        await driver.run(`MATCH (n:${label}) DETACH DELETE n`);
+        await driver.run(`MATCH (n:${label}) WHERE n.namespace = $namespace DETACH DELETE n`, {
+          namespace,
+        });
       }
     },
 

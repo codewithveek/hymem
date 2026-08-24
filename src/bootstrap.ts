@@ -8,19 +8,21 @@
  * store without changes. For a full check of an adapter, run
  * `hymem conformance`, which is this probe's exhaustive sibling.
  */
-import { storeFromEnv } from "./env.js";
+import { namespaceFromEnv, storeFromEnv } from "./env.js";
 import { factId } from "./core/ids.js";
 
 const store = await storeFromEnv();
 const storeName = process.env.MEM_STORE ?? "hydradb";
+const namespace = namespaceFromEnv();
 const observedAt = new Date().toISOString();
-const probeId = factId("probe", "bootstrap", observedAt);
+const probeId = factId(namespace, "probe", "bootstrap", observedAt);
 
 try {
-  await store.putSession({ id: "bootstrap", ts: observedAt, idx: 0 });
+  await store.putSession(namespace, { id: "bootstrap", ts: observedAt, idx: 0 });
   await store.putFacts([
     {
       id: probeId,
+      namespace,
       subject: "probe",
       attribute: "bootstrap",
       value: observedAt,
@@ -33,19 +35,20 @@ try {
       validTo: null,
     },
   ]);
-  await store.linkEntities([{ factId: probeId, entity: "probe" }]);
+  await store.linkEntities(namespace, [{ factId: probeId, entity: "probe" }]);
 
-  const [readBack] = await store.search({ entities: ["probe"], limit: 1 });
+  const [readBack] = await store.search({ namespace, entities: ["probe"], limit: 1 });
   if (readBack?.value !== observedAt) {
     throw new Error(`probe read back ${JSON.stringify(readBack)}, expected value=${observedAt}`);
   }
-  console.log(`${storeName} round-trip OK — probe value = ${readBack.value}`);
-  await store.deleteFacts([probeId]);
+  console.log(`${storeName} round-trip OK in namespace "${namespace}" — probe value = ${readBack.value}`);
+  await store.deleteFacts(namespace, [probeId]);
 } catch (error) {
   console.error(`${storeName} round-trip FAILED.`);
   console.error(
     "Checklist: service running? RUST_MIN_STACK=33554432 set (HydraDB)? " +
-      "HYDRA_TOKEN matches the node's auth-token file? MEM_STORE pointing at the right engine?",
+      "HYDRA_TOKEN matches the node's auth-token file? MEM_STORE pointing at the right engine? " +
+      "MEM_NAMESPACE set?",
   );
   console.error(error);
   process.exitCode = 1;

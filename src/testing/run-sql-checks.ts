@@ -6,6 +6,8 @@
 import { DatabaseSync } from "node:sqlite";
 import { sqlite, schemaScript, MissingSchemaError, POSTGRES, SQLITE } from "../stores/sql/index.js";
 
+const NS = "tenant_a";
+
 let failures = 0;
 function check(name: string, condition: boolean, detail = "") {
   if (condition) {
@@ -21,7 +23,7 @@ function check(name: string, condition: boolean, detail = "") {
   const store = sqlite({ database: new DatabaseSync(":memory:"), migrate: "check" });
   let thrown: unknown;
   try {
-    await store.listFacts();
+    await store.listFacts(NS);
   } catch (error) {
     thrown = error;
   }
@@ -38,7 +40,7 @@ function check(name: string, condition: boolean, detail = "") {
 // --- migrate: "auto" creates the schema -------------------------------------
 {
   const store = sqlite({ database: new DatabaseSync(":memory:"), migrate: "auto" });
-  await store.listFacts();
+  await store.listFacts(NS);
   check("migrate:auto creates the schema on first use", true);
   await store.close();
 }
@@ -48,7 +50,7 @@ function check(name: string, condition: boolean, detail = "") {
   const store = sqlite({ database: new DatabaseSync(":memory:"), migrate: "off" });
   let thrown: unknown;
   try {
-    await store.listFacts();
+    await store.listFacts(NS);
   } catch (error) {
     thrown = error;
   }
@@ -62,7 +64,7 @@ function check(name: string, condition: boolean, detail = "") {
 {
   const database = new DatabaseSync(":memory:");
   const store = sqlite({ database, migrate: "auto", tablePrefix: "agentmem_" });
-  await store.listFacts();
+  await store.listFacts(NS);
   const tables = database
     .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
     .all() as { name: string }[];

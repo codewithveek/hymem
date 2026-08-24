@@ -9,6 +9,7 @@ Agents forget across sessions, and long-context models fail on exactly three thi
 - When new information contradicts old information about the same `(subject, attribute)`, the old fact is closed and chained via a `[:SUPERSEDES]` edge — so *"where does the user live?"* and *"where did they live before?"* both have first-class answers.
 - Every fact is linked to its source session: inspectable, traceable, deletable. No hidden embeddings.
 - Recall is **entity-anchored lookup + temporal filtering**, and abstention is **structural**: no supporting facts → "I don't know based on the conversation history," before an LLM ever gets a chance to guess.
+- **Memory is multi-tenant.** Every fact is scoped to a required `namespace`, so one store serves many users or organisations without a connection pool each.
 - **The storage engine is an adapter.** The memory model above is implemented once, against a `MemoryStore` port; HydraDB, Neo4j, Memgraph, and a zero-dependency in-memory store are interchangeable, and any adapter is verifiable against a shipped conformance suite.
 
 It ships in two usable forms: a CLI/eval pipeline for LongMemEval, and an **MCP server** so Claude Code (or any MCP client) gets persistent cross-session memory backed by the graph.
@@ -36,6 +37,62 @@ npm run conformance hydradb    # a live HydraDB node
 ```
 
 All four pass the identical suite. That the same ten methods land naturally on a property graph *and* on four SQL tables is the evidence the port sits at the right altitude.
+
+## Tenancy
+
+Every operation is scoped to a `namespace`, and it is **required with no default** — an accidentally shared namespace is a data leak, so it has to be a decision rather than an omission.
+
+```ts
+createMemory({ store, model, namespace: "usr_alice" })   // personal memory
+createMemory({ store, model, namespace: "org_42" })      // shared team memory
+```
+
+One store serves every tenant. The namespace travels with each call rather than being baked into the store, so a thousand tenants share one connection pool instead of needing a pool each.
+
+### Sharing memory inside an organisation
+
+A shared namespace needs one more thing, or it silently corrupts data. The extractor canonicalises whoever is talking to `"user"`, so without an identity Alice and Bob produce the *same* fact id — and Bob moving to Denver would mark Alice's home city `superseded`.
+
+So give each session a speaker:
+
+```ts
+await memory.remember({ id, ts, idx, turns, speaker: "usr_alice" });
+await memory.remember({ id, ts, idx, turns, speaker: "usr_bob" });
+
+await memory.recall("where do I live?", { speaker: "usr_alice" });
+```
+
+`speaker` is an opaque string you supply — hymem never generates one, because your auth system already has a stable id. Identity never comes from the model: ask an LLM to name the speaker and you get `alice`, `Alice`, and `alice smith` across three sessions.
+
+**One person per namespace needs no speaker at all** — the namespace already is the identity, and the token stays literal.
+
+### Opaque ids and display names
+
+Using `usr_7f3a91` rather than `alice` survives renames and stops two people named Alice colliding. The catch is that name-based recall stops matching: a question about "Bob" plans a lookup for the string `bob`, which never touches `usr_bob123`.
+
+Pass `speakerName` and hymem links both, so the id stays the identity and the name remains a working alias:
+
+```ts
+await memory.remember({ ...session, speaker: "usr_7f3a91", speakerName: "bob" });
+```
+
+### The `"user"` token
+
+`"user"` does double duty: the placeholder for the speaker, and a word people genuinely use. *"The user clicked export and it crashed"* is about a product's end user — but with `speaker` set it would be rewritten into a fact about the speaker.
+
+The substitution only runs when `speaker` is set, so single-speaker namespaces are never exposed. If your domain does talk about users literally, change the token:
+
+```ts
+createMemory({ store, model, namespace, speakerToken: "__self__" })
+```
+
+Custom extractors must emit whatever token you configure.
+
+### What tenancy is not
+
+This is **application-level isolation, not database-level**. Facts carry a namespace column, every query filters on it, and the conformance suite verifies that search, listing, supersession, deletion, and history all refuse to cross the boundary. But it is still hymem enforcing the rule in SQL it generates.
+
+If you need a guarantee that survives a bug in this library — regulated data, untrusted tenants — put Postgres row-level security underneath it, or give each tenant its own database. Namespacing is the right default; it is not the boundary to stake compliance on alone.
 
 ### Any ORM, without an adapter per ORM
 
@@ -69,7 +126,7 @@ npm run schema -- --dialect postgres          # or sqlite, and --prefix
 
 `tablePrefix` (default `hymem_`) keeps hymem clear of your own `facts` and `sessions` tables.
 
-Writing your own adapter is implementing the ten methods and making `runStoreConformance` pass — 18 tests covering round-tripping, supersession, re-activation, idempotent re-ingest, ordering, limits, deletion semantics, and concurrency. It needs no LLM and no API keys.
+Writing your own adapter is implementing the ten methods and making `runStoreConformance` pass — 25 tests covering round-tripping, supersession, re-activation, idempotent re-ingest, ordering, limits, deletion semantics, concurrency, and tenant isolation. It needs no LLM and no API keys.
 
 ### Supersession is one method, deliberately
 
@@ -218,6 +275,7 @@ import { openai } from "@ai-sdk/openai";
 const memory = createMemory({
   store: hydradb({ url: "bolt://127.0.0.1:7687", token: process.env.HYDRA_TOKEN }),
   model: openai("gpt-4o-mini"),
+  namespace: `usr_${userId}`,   // required — the tenant boundary
   abstainThreshold: 1,
   maxFacts: 24,
 });

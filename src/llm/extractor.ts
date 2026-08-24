@@ -8,9 +8,9 @@
  */
 import { z } from "zod";
 import type { LanguageModel } from "ai";
-import type { Extractor } from "../core/ports.js";
-import type { Fact, SessionInput } from "../core/types.js";
-import { canonAttribute, canonEntity, factId } from "../core/ids.js";
+import type { ExtractedFact, Extractor } from "../core/ports.js";
+import type { SessionInput } from "../core/types.js";
+import { canonEntity } from "../core/ids.js";
 import { object } from "./generate.js";
 
 export const DEFAULT_EXTRACTION_SCHEMA = z.object({
@@ -42,7 +42,7 @@ export function llmExtractor(model: LanguageModel, options: LlmExtractorOptions 
   const schema = options.schema ?? DEFAULT_EXTRACTION_SCHEMA;
 
   return {
-    async extract(session: SessionInput): Promise<Fact[]> {
+    async extract(session: SessionInput): Promise<ExtractedFact[]> {
       const transcript = session.turns
         .map((turn) => `${turn.role.toUpperCase()}: ${turn.content}`)
         .join("\n");
@@ -52,19 +52,18 @@ export function llmExtractor(model: LanguageModel, options: LlmExtractorOptions 
         system,
         `Session timestamp: ${session.ts}\n\n${transcript}`,
       );
+      // Triples only. Core assigns the id and namespace, and rewrites the
+      // speaker token — so this never has to know about tenancy or hashing.
       return extracted.facts.map((extractedFact) => {
         const subject = canonEntity(extractedFact.subject);
-        const attribute = canonAttribute(extractedFact.attribute);
-        const value = extractedFact.value.trim();
         return {
           subject,
-          attribute,
-          value,
+          attribute: extractedFact.attribute.trim().toLowerCase(),
+          value: extractedFact.value.trim(),
           text: extractedFact.text,
-          // The subject is always an entity: recall anchors on it (e.g. "user"),
-          // and extractors routinely list only the *other* named entities.
+          // The subject is always an entity: recall anchors on it, and
+          // extractors routinely list only the *other* named entities.
           entities: [...new Set([subject, ...extractedFact.entities.map(canonEntity)])],
-          id: factId(subject, attribute, value),
           observedAt: session.ts,
           sessionId: session.id,
         };

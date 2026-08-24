@@ -24,6 +24,16 @@ export interface StoreCapabilities {
 /**
  * Persistence port.
  *
+ * TENANCY. Every operation is scoped to a `namespace`, and a store MUST NOT
+ * return or modify anything outside the one it was given. The namespace is
+ * passed per call rather than baked into the store on purpose: one store — and
+ * so one connection pool — serves every tenant. A store per tenant would defeat
+ * the point.
+ *
+ * Fact ids already embed the namespace, so an id cannot address another
+ * tenant's row. Filter on the namespace column anyway: it is the index the
+ * database wants, and defence in depth is cheap here.
+ *
  * Contract notes that adapters get wrong if they aren't spelled out:
  *
  *  - `putFacts` is an UPSERT keyed on `fact.id`. Re-stating a fact that was
@@ -43,13 +53,13 @@ export interface MemoryStore {
   // --- write path -----------------------------------------------------------
 
   /** Upsert a session and, when `prevId` is given, the timeline edge prev → s. */
-  putSession(s: SessionRecord, prevId?: string): Promise<void>;
+  putSession(namespace: string, session: SessionRecord, prevId?: string): Promise<void>;
 
   /** Upsert facts as active (see re-activation note above). */
   putFacts(facts: StoredFact[]): Promise<void>;
 
   /** Idempotently associate facts with canonical entity names. */
-  linkEntities(links: { factId: string; entity: string }[]): Promise<void>;
+  linkEntities(namespace: string, links: { factId: string; entity: string }[]): Promise<void>;
 
   /**
    * Close every active fact that `incoming` overwrites, record the
@@ -76,27 +86,44 @@ export interface MemoryStore {
   search(q: SearchQuery): Promise<StoredFact[]>;
 
   /** Values `factId` overwrote. Order is not significant; recall re-sorts. */
-  getSupersededBy(factId: string): Promise<{ value: string; observedAt: string }[]>;
+  getSupersededBy(namespace: string, factId: string): Promise<{ value: string; observedAt: string }[]>;
 
   // --- administration -------------------------------------------------------
 
-  /** Every stored fact, optionally narrowed to one entity. Ascending by observedAt. */
-  listFacts(entity?: string): Promise<StoredFact[]>;
+  /** Every stored fact in the namespace, optionally narrowed to one entity. Ascending by observedAt. */
+  listFacts(namespace: string, entity?: string): Promise<StoredFact[]>;
 
   /** Delete facts and any edges touching them. Unknown ids are ignored. */
-  deleteFacts(ids: string[]): Promise<void>;
+  deleteFacts(namespace: string, ids: string[]): Promise<void>;
 
-  /** Remove everything this store owns. */
-  clear(): Promise<void>;
+  /**
+   * Remove everything in ONE namespace. There is deliberately no "wipe the
+   * whole store" call: dropping every tenant is a database administration task,
+   * not something a memory instance should be able to do by accident.
+   */
+  clear(namespace: string): Promise<void>;
 
   /** Release connections. Safe to call twice. */
   close(): Promise<void>;
 }
 
-/** Session transcript → durable facts. The write-path brain. */
+/**
+ * Session transcript → durable facts. The write-path brain.
+ *
+ * An extractor returns triples, NOT identity: core assigns `id` and `namespace`
+ * and applies the speaker rewrite afterwards, so a custom extractor cannot get
+ * hashing, canonicalisation, or tenancy wrong. Anything it puts in those two
+ * fields is ignored.
+ *
+ * Attribute facts about the person speaking to the configured speaker token
+ * ("user" by default) — core swaps that for the session's `speaker`.
+ */
 export interface Extractor {
-  extract(session: SessionInput): Promise<Fact[]>;
+  extract(session: SessionInput): Promise<ExtractedFact[]>;
 }
+
+/** What an extractor produces: a triple, with identity left to core. */
+export type ExtractedFact = Omit<Fact, "id" | "namespace">;
 
 /** Question → store lookup keys. The read-path brain. */
 export interface QueryPlanner {

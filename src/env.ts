@@ -103,12 +103,34 @@ export async function storeFromEnv(): Promise<MemoryStore> {
   }
 }
 
+/**
+ * The tenant this process works in.
+ *
+ * Required, with no fallback: an accidentally shared namespace is a data leak,
+ * so it has to be a decision. Single-user setups can set MEM_NAMESPACE to
+ * anything stable ("local").
+ */
+export function namespaceFromEnv(): string {
+  const namespace = process.env.MEM_NAMESPACE;
+  if (!namespace) {
+    throw new Error(
+      "hymem: MEM_NAMESPACE is not set. It is the tenant boundary — every fact is " +
+        'scoped to it. Use a per-user or per-organisation value, or "local" for a ' +
+        "single-user setup.",
+    );
+  }
+  return namespace;
+}
+
 export async function memoryFromEnv(
   overrides: Partial<Parameters<typeof createMemory>[0]> = {},
 ): Promise<Memory> {
   return createMemory({
     store: await storeFromEnv(),
     model: modelFromEnv(),
+    namespace: namespaceFromEnv(),
+    speaker: process.env.MEM_SPEAKER,
+    speakerToken: process.env.MEM_SPEAKER_TOKEN,
     maxFacts: Number(process.env.MEM_MAX_FACTS ?? 24),
     abstainThreshold: Number(process.env.MEM_ABSTAIN_THRESHOLD ?? 1),
     ...overrides,

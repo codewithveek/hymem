@@ -27,6 +27,7 @@ export interface SqlStoreOptions {
 
 interface FactRow {
   id: string;
+  namespace: string;
   subject: string;
   attribute: string;
   value: string;
@@ -39,7 +40,7 @@ interface FactRow {
 }
 
 const FACT_COLUMNS =
-  "id, subject, attribute, value, fact_text, observed_at, session_id, status, valid_from, valid_to";
+  "id, namespace, subject, attribute, value, fact_text, observed_at, session_id, status, valid_from, valid_to";
 
 export function sqlStore(options: SqlStoreOptions): MemoryStore {
   const { driver } = options;
@@ -97,6 +98,7 @@ export function sqlStore(options: SqlStoreOptions): MemoryStore {
 
   const toStoredFact = (row: FactRow, entities: string[]): StoredFact => ({
     id: row.id,
+    namespace: row.namespace,
     subject: row.subject,
     attribute: row.attribute,
     value: row.value,
@@ -113,12 +115,14 @@ export function sqlStore(options: SqlStoreOptions): MemoryStore {
    * Attach entities to fact rows with one extra query rather than an
    * aggregate, since string_agg/group_concat spelling differs per engine.
    */
-  async function withEntities(rows: FactRow[]): Promise<StoredFact[]> {
+  async function withEntities(namespace: string, rows: FactRow[]): Promise<StoredFact[]> {
     if (rows.length === 0) return [];
     const binder = newBinder();
+    const namespaceParam = binder.bind(namespace);
     const idList = binder.list(rows.map((row) => row.id));
     const links = await driver.query<{ fact_id: string; entity: string }>(
-      `SELECT fact_id, entity FROM ${tables.factEntities} WHERE fact_id IN (${idList})`,
+      `SELECT fact_id, entity FROM ${tables.factEntities}
+       WHERE namespace = ${namespaceParam} AND fact_id IN (${idList})`,
       binder.values,
     );
     const entitiesByFactId = new Map<string, string[]>();
@@ -136,22 +140,25 @@ export function sqlStore(options: SqlStoreOptions): MemoryStore {
   return {
     capabilities,
 
-    async putSession(session: SessionRecord, previousSessionId?: string) {
+    async putSession(namespace: string, session: SessionRecord, previousSessionId?: string) {
       await ensureSchema();
       const binder = newBinder();
       const values = [
+        binder.bind(namespace),
         binder.bind(session.id),
         binder.bind(session.ts),
         binder.bind(session.idx),
         binder.bind(previousSessionId ?? null),
+        binder.bind(session.speaker ?? null),
       ].join(", ");
       await driver.query(
-        `INSERT INTO ${tables.sessions} (id, ts, session_index, previous_session_id)
+        `INSERT INTO ${tables.sessions} (namespace, id, ts, session_index, previous_session_id, speaker)
          VALUES (${values})
-         ${dialect.upsert(["id"], [
+         ${dialect.upsert(["namespace", "id"], [
            "ts = excluded.ts",
            "session_index = excluded.session_index",
            "previous_session_id = excluded.previous_session_id",
+           "speaker = excluded.speaker",
          ])}`,
         binder.values,
       );
@@ -164,6 +171,7 @@ export function sqlStore(options: SqlStoreOptions): MemoryStore {
         const binder = newBinder();
         const values = [
           binder.bind(incomingFact.id),
+          binder.bind(incomingFact.namespace),
           binder.bind(incomingFact.subject),
           binder.bind(incomingFact.attribute),
           binder.bind(incomingFact.value),
@@ -178,9 +186,10 @@ export function sqlStore(options: SqlStoreOptions): MemoryStore {
         // and validTo is cleared.
         await driver.query(
           `INSERT INTO ${tables.facts}
-             (id, subject, attribute, value, fact_text, observed_at, session_id, status, valid_from, valid_to)
+             (id, namespace, subject, attribute, value, fact_text, observed_at, session_id, status, valid_from, valid_to)
            VALUES (${values}, NULL)
            ${dialect.upsert(["id"], [
+             "namespace = excluded.namespace",
              "subject = excluded.subject",
              "attribute = excluded.attribute",
              "value = excluded.value",
@@ -196,14 +205,18 @@ export function sqlStore(options: SqlStoreOptions): MemoryStore {
       }
     },
 
-    async linkEntities(links) {
+    async linkEntities(namespace: string, links) {
       await ensureSchema();
       if (links.length === 0) return;
       for (const link of links) {
         const binder = newBinder();
-        const values = [binder.bind(link.factId), binder.bind(link.entity)].join(", ");
+        const values = [
+          binder.bind(namespace),
+          binder.bind(link.factId),
+          binder.bind(link.entity),
+        ].join(", ");
         await driver.query(
-          `INSERT INTO ${tables.factEntities} (fact_id, entity) VALUES (${values})
+          `INSERT INTO ${tables.factEntities} (namespace, fact_id, entity) VALUES (${values})
            ${dialect.insertIgnore(["fact_id", "entity"])}`,
           binder.values,
         );
@@ -217,7 +230,8 @@ export function sqlStore(options: SqlStoreOptions): MemoryStore {
       const closeClause = (binder: ReturnType<typeof newBinder>) =>
         `UPDATE ${tables.facts}
             SET status = 'superseded', valid_to = ${binder.bind(incoming.observedAt)}
-          WHERE status = 'active'
+          WHERE namespace = ${binder.bind(incoming.namespace)}
+            AND status = 'active'
             AND id <> ${binder.bind(incoming.id)}
             AND subject = ${binder.bind(incoming.subject)}
             AND attribute = ${binder.bind(incoming.attribute)}
@@ -268,6 +282,7 @@ export function sqlStore(options: SqlStoreOptions): MemoryStore {
       await ensureSchema();
       if (query.entities.length === 0) return [];
       const binder = newBinder();
+      const namespaceParam = binder.bind(query.namespace);
       const entityList = binder.list(query.entities);
       const attributes = query.attributes ?? [];
       const attributeFilter = attributes.length
@@ -279,48 +294,64 @@ export function sqlStore(options: SqlStoreOptions): MemoryStore {
         `SELECT DISTINCT ${FACT_COLUMNS.split(", ").map((column) => `facts.${column}`).join(", ")}
          FROM ${tables.facts} facts
          JOIN ${tables.factEntities} links ON links.fact_id = facts.id
-         WHERE links.entity IN (${entityList}) ${attributeFilter}
+         WHERE facts.namespace = ${namespaceParam}
+           AND links.entity IN (${entityList}) ${attributeFilter}
          ORDER BY facts.observed_at DESC
          LIMIT ${limit}`,
         binder.values,
       );
-      return (await withEntities(rows)).sort(ascending);
+      return (await withEntities(query.namespace, rows)).sort(ascending);
     },
 
-    async getSupersededBy(factId: string) {
+    async getSupersededBy(namespace: string, factId: string) {
       await ensureSchema();
       const binder = newBinder();
       const rows = await driver.query<{ value: string; observed_at: string }>(
         `SELECT facts.value, facts.observed_at
          FROM ${tables.supersedes} chain
          JOIN ${tables.facts} facts ON facts.id = chain.old_fact_id
-         WHERE chain.new_fact_id = ${binder.bind(factId)}`,
+         WHERE chain.new_fact_id = ${binder.bind(factId)}
+           AND facts.namespace = ${binder.bind(namespace)}`,
         binder.values,
       );
       return rows.map((row) => ({ value: row.value, observedAt: row.observed_at }));
     },
 
-    async listFacts(entity?: string) {
+    async listFacts(namespace: string, entity?: string) {
       await ensureSchema();
       const binder = newBinder();
+      const namespaceParam = binder.bind(namespace);
       const rows = entity
         ? await driver.query<FactRow>(
             `SELECT DISTINCT ${FACT_COLUMNS.split(", ").map((column) => `facts.${column}`).join(", ")}
              FROM ${tables.facts} facts
              JOIN ${tables.factEntities} links ON links.fact_id = facts.id
-             WHERE links.entity = ${binder.bind(entity)}
+             WHERE facts.namespace = ${namespaceParam} AND links.entity = ${binder.bind(entity)}
              ORDER BY facts.observed_at`,
             binder.values,
           )
         : await driver.query<FactRow>(
-            `SELECT ${FACT_COLUMNS} FROM ${tables.facts} ORDER BY observed_at`,
-            [],
+            `SELECT ${FACT_COLUMNS} FROM ${tables.facts}
+             WHERE namespace = ${namespaceParam}
+             ORDER BY observed_at`,
+            binder.values,
           );
-      return (await withEntities(rows)).sort(ascending);
+      return (await withEntities(namespace, rows)).sort(ascending);
     },
 
-    async deleteFacts(factIds: string[]) {
+    async deleteFacts(namespace: string, factIds: string[]) {
       await ensureSchema();
+      if (factIds.length === 0) return;
+      // Narrow to ids this namespace actually owns, so a stray id from another
+      // tenant deletes nothing.
+      const scopeBinder = newBinder();
+      const owned = await driver.query<{ id: string }>(
+        `SELECT id FROM ${tables.facts}
+         WHERE namespace = ${scopeBinder.bind(namespace)}
+           AND id IN (${scopeBinder.list(factIds)})`,
+        scopeBinder.values,
+      );
+      factIds = owned.map((row) => row.id);
       if (factIds.length === 0) return;
       // Explicit cascade rather than FK ON DELETE: SQLite enforces foreign
       // keys only when the connection enables them, so doing it here keeps
@@ -339,10 +370,23 @@ export function sqlStore(options: SqlStoreOptions): MemoryStore {
       }
     },
 
-    async clear() {
+    /** Scoped wipe: other tenants in this store are untouched. */
+    async clear(namespace: string) {
       await ensureSchema();
-      for (const table of [tables.supersedes, tables.factEntities, tables.facts, tables.sessions]) {
-        await driver.query(`DELETE FROM ${table}`, []);
+      const chainBinder = newBinder();
+      await driver.query(
+        `DELETE FROM ${tables.supersedes}
+         WHERE new_fact_id IN (
+           SELECT id FROM ${tables.facts} WHERE namespace = ${chainBinder.bind(namespace)}
+         )`,
+        chainBinder.values,
+      );
+      for (const table of [tables.factEntities, tables.facts, tables.sessions]) {
+        const binder = newBinder();
+        await driver.query(
+          `DELETE FROM ${table} WHERE namespace = ${binder.bind(namespace)}`,
+          binder.values,
+        );
       }
     },
 

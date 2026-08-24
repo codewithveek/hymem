@@ -46,13 +46,17 @@ export function createTableStatements(dialect: SqlDialect, tables: TableNames): 
   const { keyType: key, textType: text, integerType: integer } = dialect;
   return [
     `CREATE TABLE IF NOT EXISTS ${tables.sessions} (
-       id ${key} PRIMARY KEY,
+       namespace ${key} NOT NULL,
+       id ${key} NOT NULL,
        ts ${key} NOT NULL,
        session_index ${integer} NOT NULL,
-       previous_session_id ${key}
+       previous_session_id ${key},
+       speaker ${key},
+       PRIMARY KEY (namespace, id)
      )`,
     `CREATE TABLE IF NOT EXISTS ${tables.facts} (
        id ${key} PRIMARY KEY,
+       namespace ${key} NOT NULL,
        subject ${key} NOT NULL,
        attribute ${key} NOT NULL,
        value ${text} NOT NULL,
@@ -64,6 +68,7 @@ export function createTableStatements(dialect: SqlDialect, tables: TableNames): 
        valid_to ${key}
      )`,
     `CREATE TABLE IF NOT EXISTS ${tables.factEntities} (
+       namespace ${key} NOT NULL,
        fact_id ${key} NOT NULL,
        entity ${key} NOT NULL,
        PRIMARY KEY (fact_id, entity)
@@ -73,14 +78,17 @@ export function createTableStatements(dialect: SqlDialect, tables: TableNames): 
        old_fact_id ${key} NOT NULL,
        PRIMARY KEY (new_fact_id, old_fact_id)
      )`,
+    // Every index leads with `namespace`: it is the first predicate in every
+    // query, so a tenant's rows stay contiguous and one tenant's size does not
+    // slow another's lookups.
     // Supersession lookup: the hot path on every ingested fact.
     `CREATE INDEX IF NOT EXISTS ${tables.facts}_slot_idx
-       ON ${tables.facts} (subject, attribute, status)`,
+       ON ${tables.facts} (namespace, subject, attribute, status)`,
     // Recall anchors on entity, then orders by time.
     `CREATE INDEX IF NOT EXISTS ${tables.factEntities}_entity_idx
-       ON ${tables.factEntities} (entity)`,
+       ON ${tables.factEntities} (namespace, entity)`,
     `CREATE INDEX IF NOT EXISTS ${tables.facts}_observed_at_idx
-       ON ${tables.facts} (observed_at)`,
+       ON ${tables.facts} (namespace, observed_at)`,
   ];
 }
 

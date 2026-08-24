@@ -16,7 +16,7 @@ import type { Answerer, Extractor, MemoryStore, QueryPlanner } from "./ports.js"
 import type {
   AnswerResult, Fact, RecallResult, SessionInput, StoredFact,
 } from "./types.js";
-import { ingestHistory, ingestSession } from "./ingest.js";
+import { identifyFacts, ingestHistory, ingestSession } from "./ingest.js";
 import { llmAnswerer, llmExtractor, llmPlanner } from "../llm/index.js";
 import { recall as runRecall } from "./recall.js";
 import { canonEntity } from "./ids.js";
@@ -24,6 +24,30 @@ import { canonEntity } from "./ids.js";
 export interface MemoryOptions {
   /** Where facts live. Required — there is no default store. */
   store: MemoryStore;
+
+  /**
+   * Tenant boundary. Required, with no default: an accidental shared namespace
+   * is a data leak, so it has to be a decision rather than an omission.
+   *
+   * One namespace per end user gives isolated per-user memory. One namespace
+   * per organisation gives shared team memory — and then each session needs a
+   * `speaker`, or everyone collides on the same subject.
+   */
+  namespace: string;
+
+  /**
+   * Default identity for the human, when this memory serves one person.
+   * Per-session `speaker` overrides it, which is what a shared namespace needs.
+   */
+  speaker?: string;
+
+  /**
+   * Placeholder the extractor and planner use for "the human speaking".
+   * Default "user". Change it if your domain talks about users literally —
+   * "the user clicked export" would otherwise be rewritten into a fact about
+   * the speaker. Custom extractors must agree on the token.
+   */
+  speakerToken?: string;
 
   /**
    * Convenience: fills extractor, planner and answerer with LLM-backed
@@ -51,6 +75,9 @@ export interface Memory {
   /** The store, for adapter-specific escapes. */
   readonly store: MemoryStore;
 
+  /** The namespace every operation on this memory is scoped to. */
+  readonly namespace: string;
+
   /** Extract and persist facts from one session. */
   remember(session: SessionInput, previousSessionId?: string): Promise<Fact[]>;
   /** Ingest a whole history in chronological order. Returns the fact count. */
@@ -60,15 +87,15 @@ export interface Memory {
   ): Promise<number>;
 
   /** Retrieve supporting facts and a prompt-ready context block. No LLM synthesis. */
-  recall(question: string): Promise<RecallResult>;
+  recall(question: string, options?: { speaker?: string }): Promise<RecallResult>;
   /** Retrieve, then answer in prose. Abstains structurally when unsupported. */
-  ask(question: string): Promise<AnswerResult>;
+  ask(question: string, options?: { speaker?: string }): Promise<AnswerResult>;
 
   /** Every stored fact, optionally narrowed to one entity. */
   facts(entity?: string): Promise<StoredFact[]>;
   /** Delete facts by id. */
   forget(ids: string[]): Promise<void>;
-  /** Wipe everything this memory owns. */
+  /** Wipe this namespace. Other namespaces in the same store are untouched. */
   clear(): Promise<void>;
   /** Release the store's connections. */
   close(): Promise<void>;
@@ -85,9 +112,14 @@ export class MissingStageError extends Error {
 export const ABSTAIN_ANSWER = "I don't know based on the conversation history.";
 
 export function createMemory(options: MemoryOptions): Memory {
-  const { store, model } = options;
+  const { store, model, namespace } = options;
+  if (!namespace) {
+    throw new Error("hymem: createMemory() requires a `namespace`. It is the tenant boundary.");
+  }
   const maxFacts = options.maxFacts ?? 24;
   const abstainThreshold = options.abstainThreshold ?? 1;
+  const { speakerToken } = options;
+  const ingestOptions = { namespace, speakerToken };
 
   // Stages are resolved lazily so that constructing a recall-only memory
   // never requires an extraction model, and vice versa.
@@ -125,27 +157,50 @@ export function createMemory(options: MemoryOptions): Memory {
     return (resolvedAnswerer = llmAnswerer(model));
   };
 
+  const identify = (extracted: Awaited<ReturnType<Extractor["extract"]>>, session: SessionInput) =>
+    identifyFacts(extracted, session, ingestOptions);
+
   return {
     store,
+    namespace,
 
     async remember(session, previousSessionId) {
-      const facts = await requireExtractor().extract(session);
-      return ingestSession(store, facts, session, previousSessionId);
+      const withSpeaker = { ...session, speaker: session.speaker ?? options.speaker };
+      const extracted = await requireExtractor().extract(withSpeaker);
+      return ingestSession(
+        store,
+        identify(extracted, withSpeaker),
+        withSpeaker,
+        ingestOptions,
+        previousSessionId,
+      );
     },
 
     rememberAll(sessions, onProgress) {
       const extractor = requireExtractor();
-      return ingestHistory(store, (session) => extractor.extract(session), sessions, onProgress);
+      return ingestHistory(
+        store,
+        async (session) => identify(await extractor.extract(session), session),
+        sessions.map((session) => ({ ...session, speaker: session.speaker ?? options.speaker })),
+        ingestOptions,
+        onProgress,
+      );
     },
 
-    async recall(question) {
+    async recall(question, recallOptions) {
       const link = await requirePlanner().plan(question);
-      return runRecall(store, link, { maxFacts, abstainThreshold });
+      return runRecall(store, link, {
+        namespace,
+        maxFacts,
+        abstainThreshold,
+        speaker: recallOptions?.speaker ?? options.speaker,
+        speakerToken,
+      });
     },
 
-    async ask(question) {
+    async ask(question, askOptions) {
       const answerer = requireAnswerer(); // fail fast, before spending a plan call
-      const recalled = await this.recall(question);
+      const recalled = await this.recall(question, askOptions);
       // Structural abstention: no supporting facts -> refuse *before* the LLM can guess.
       if (recalled.abstained) {
         return { answer: ABSTAIN_ANSWER, abstained: true, contextBlock: recalled.contextBlock };
@@ -157,9 +212,9 @@ export function createMemory(options: MemoryOptions): Memory {
       };
     },
 
-    facts: (entity) => store.listFacts(entity ? canonEntity(entity) : undefined),
-    forget: (ids) => store.deleteFacts(ids),
-    clear: () => store.clear(),
+    facts: (entity) => store.listFacts(namespace, entity ? canonEntity(entity) : undefined),
+    forget: (ids) => store.deleteFacts(namespace, ids),
+    clear: () => store.clear(namespace),
     close: () => store.close(),
   };
 }

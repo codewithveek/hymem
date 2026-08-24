@@ -1,10 +1,19 @@
-import { canonAttribute, canonEntity } from "./ids.js";
+import { canonAttribute, canonEntity, DEFAULT_SPEAKER_TOKEN } from "./ids.js";
 import type { MemoryStore } from "./ports.js";
 import type { QueryLink, RecallResult, RetrievedFact, StoredFact } from "./types.js";
 
 export interface RecallOptions {
+  namespace: string;
   maxFacts: number;
   abstainThreshold: number;
+  /**
+   * Who "I"/"the user" refers to in this question. The planner emits the
+   * speaker token; we swap it for this, mirroring the write path. Leave unset
+   * when the namespace holds one person.
+   */
+  speaker?: string;
+  /** Placeholder the planner uses for the speaker. Default "user". */
+  speakerToken?: string;
 }
 
 /**
@@ -25,11 +34,24 @@ export async function recall(
   link: QueryLink,
   options: RecallOptions,
 ): Promise<RecallResult> {
-  const entities = [...new Set(link.entities.map(canonEntity))].filter(Boolean);
+  // Same substitution as ingest: the planner says "user", the store knows an
+  // identity. Without this, a question about oneself finds nothing in a
+  // namespace where facts are keyed by speaker id.
+  const token = canonEntity(options.speakerToken ?? DEFAULT_SPEAKER_TOKEN);
+  const speaker = options.speaker ? canonEntity(options.speaker) : undefined;
+  const resolve = (name: string): string => {
+    const canonical = canonEntity(name);
+    return speaker && canonical === token ? speaker : canonical;
+  };
+
+  const entities = [...new Set(link.entities.map(resolve))].filter(Boolean);
   const attributes = [...new Set((link.attributes ?? []).map(canonAttribute))].filter(Boolean);
   const limit = Math.max(1, Math.floor(options.maxFacts));
 
-  const candidates = entities.length === 0 ? [] : await store.search({ entities, attributes, limit });
+  const candidates =
+    entities.length === 0
+      ? []
+      : await store.search({ namespace: options.namespace, entities, attributes, limit });
   const withinWindow = candidates
     .filter((candidate) => isWithinRequestedWindow(candidate, link))
     .slice(0, limit);
@@ -37,7 +59,7 @@ export async function recall(
   const facts: RetrievedFact[] = await Promise.all(
     withinWindow.map(async (fact) => ({
       ...fact,
-      supersedes: (await store.getSupersededBy(fact.id)).sort((newer, older) =>
+      supersedes: (await store.getSupersededBy(options.namespace, fact.id)).sort((newer, older) =>
         older.observedAt.localeCompare(newer.observedAt),
       ),
     })),

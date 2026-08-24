@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
 import { Command } from "commander";
-import { memoryFromEnv } from "./env.js";
+import { memoryFromEnv, namespaceFromEnv, storeFromEnv } from "./env.js";
 import { runStoreConformance, CONFORMANCE_TEST_COUNT } from "./testing/conformance.js";
-import { storeFromEnv } from "./env.js";
 import type { SessionInput } from "./core/types.js";
 
 const memory = await memoryFromEnv();
@@ -12,8 +11,8 @@ const program = new Command();
 
 program
   .name("hymem")
-  .description("Temporal knowledge-graph agent memory — store-agnostic")
-  .version("0.2.0")
+  .description("Temporal knowledge-graph agent memory — store-agnostic, multi-tenant")
+  .version("0.3.0")
   .hook("postAction", async () => {
     await memory.close();
   });
@@ -70,7 +69,7 @@ program
         `[${fact.status}] ${fact.observedAt} · ${fact.text}  (id ${fact.id}, session ${fact.sessionId})`,
       );
     }
-    console.log(`\n${facts.length} fact(s).`);
+    console.log(`\n${facts.length} fact(s) in namespace "${memory.namespace}".`);
   });
 
 program
@@ -88,12 +87,22 @@ program
   .action(async () => {
     const store = await storeFromEnv();
     console.log(`Running ${CONFORMANCE_TEST_COUNT} conformance tests against ${process.env.MEM_STORE ?? "hydradb"}:\n`);
+    console.log('(the suite uses its own "tenant_a"/"tenant_b" namespaces)\n');
     const result = await runStoreConformance(() => store, { verbose: true });
     console.log(
       `\n${result.passed} passed, ${result.failed.length} failed, ${result.skipped.length} skipped`,
     );
     await store.close();
     if (result.failed.length > 0) process.exitCode = 1;
+  });
+
+program
+  .command("wipe")
+  .description("Delete every fact in the configured namespace")
+  .action(async () => {
+    const namespace = namespaceFromEnv();
+    await memory.clear();
+    console.log(`Wiped namespace "${namespace}".`);
   });
 
 program
