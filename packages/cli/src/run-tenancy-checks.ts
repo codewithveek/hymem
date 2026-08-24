@@ -6,10 +6,14 @@
  * These sit above the store contract, so `runStoreConformance` cannot cover
  * them. A stub extractor stands in for the LLM, so this needs no API key.
  */
-import { createMemory } from "../core/memory.js";
-import { memoryStore } from "../stores/memory-store.js";
-import type { ExtractedFact, Extractor, QueryPlanner } from "../core/ports.js";
-import type { SessionInput } from "../core/types.js";
+import {
+  createMemory,
+  memoryStore,
+  type ExtractedFact,
+  type Extractor,
+  type QueryPlanner,
+  type SessionInput,
+} from "hymem";
 
 let failures = 0;
 function check(name: string, condition: boolean, detail = "") {

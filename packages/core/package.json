@@ -1,0 +1,63 @@
+{
+  "name": "hymem",
+  "type": "module",
+  "version": "0.4.0",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22.17"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "description": "Multi-tenant temporal knowledge-graph agent memory with pluggable stores",
+  "keywords": [
+    "agent-memory",
+    "memory",
+    "knowledge-graph",
+    "temporal",
+    "multi-tenant",
+    "adapter",
+    "mcp",
+    "ai"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./stores/sql": {
+      "types": "./dist/stores/sql/index.d.ts",
+      "import": "./dist/stores/sql/index.js"
+    },
+    "./stores/cypher": {
+      "types": "./dist/stores/cypher/index.d.ts",
+      "import": "./dist/stores/cypher/index.js"
+    },
+    "./llm": {
+      "types": "./dist/llm/index.d.ts",
+      "import": "./dist/llm/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/conformance.d.ts",
+      "import": "./dist/testing/conformance.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "zod": "^3.25.0"
+  },
+  "peerDependencies": {
+    "ai": "^7"
+  },
+  "peerDependenciesMeta": {
+    "ai": {
+      "optional": true
+    }
+  }
+}

@@ -9,7 +9,7 @@
  * `hymem conformance`, which is this probe's exhaustive sibling.
  */
 import { namespaceFromEnv, storeFromEnv } from "./env.js";
-import { factId } from "./core/ids.js";
+import { factId } from "hymem";
 
 const store = await storeFromEnv();
 const storeName = process.env.MEM_STORE ?? "hydradb";

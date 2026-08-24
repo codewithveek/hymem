@@ -16,7 +16,7 @@
 import { createHash } from "node:crypto";
 import type { MemoryStore, StoreCapabilities } from "../../core/ports.js";
 import type { SearchQuery, SessionRecord, StoredFact } from "../../core/types.js";
-import { int, type CypherDriver, type Integer } from "./driver.js";
+import type { CypherDriver } from "./driver.js";
 import { HYDRADB, type Dialect } from "./dialect.js";
 
 export interface CypherStoreOptions {
@@ -42,16 +42,22 @@ interface FactRow {
   entities_json: string | null;
 }
 
-type PropertyValue = string | number | boolean | Integer;
+/**
+ * A graph id is opaque here: an encoded integer on dialects that demand one,
+ * a namespaced string otherwise. Only the driver knows the wire encoding.
+ */
+type GraphId = unknown;
+
+type PropertyValue = string | number | boolean | GraphId;
 
 interface NodeUpsert {
-  id: Integer | string;
+  id: GraphId;
   properties: Record<string, PropertyValue | undefined>;
 }
 
 interface EdgeUpsert {
-  source: Integer | string;
-  destination: Integer | string;
+  source: GraphId;
+  destination: GraphId;
 }
 
 export function cypherStore(options: CypherStoreOptions): MemoryStore {
@@ -68,10 +74,10 @@ export function cypherStore(options: CypherStoreOptions): MemoryStore {
    * Domain key -> graph id. Integer dialects get a stable 52-bit hash (kept
    * exact as a JS number); everything else uses the namespaced string.
    */
-  const graphId = (kind: string, key: string): Integer | string => {
+  const graphId = (kind: string, key: string): GraphId => {
     if (!dialect.integerIds) return `${kind}:${key}`;
     const hex = createHash("sha256").update(`${kind}:${key}`).digest("hex").slice(0, 13);
-    return int(parseInt(hex, 16));
+    return driver.int(parseInt(hex, 16));
   };
 
   // Fact ids already embed the namespace (core hashes it in). Entity and
@@ -175,7 +181,7 @@ export function cypherStore(options: CypherStoreOptions): MemoryStore {
             key: session.id,
             namespace,
             ts: session.ts,
-            idx: dialect.integerIds ? int(session.idx) : session.idx,
+            idx: dialect.integerIds ? driver.int(session.idx) : session.idx,
             speaker: session.speaker,
           },
         },

@@ -3,12 +3,12 @@
  * `npm run conformance [store]` — verify a store adapter against the suite.
  * Defaults to the in-memory reference store, which needs no services running.
  */
-import { runStoreConformance, CONFORMANCE_TEST_COUNT } from "./conformance.js";
-import { memoryStore } from "../stores/memory-store.js";
-import { hydradb } from "../stores/cypher/index.js";
-import { postgres, sqlite } from "../stores/sql/index.js";
+import { runStoreConformance, CONFORMANCE_TEST_COUNT } from "hymem/testing";
+import { memoryStore, type MemoryStore } from "hymem";
+import { hydradb } from "@hymem/bolt";
+import { postgres } from "@hymem/postgres";
+import { sqlite } from "@hymem/sqlite";
 import { DatabaseSync } from "node:sqlite";
-import type { MemoryStore } from "../core/ports.js";
 
 try {
   process.loadEnvFile(".env"); // only the store adapters need credentials

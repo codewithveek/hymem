@@ -20,6 +20,7 @@ export type {
   MemoryStore,
   StoreCapabilities,
   Extractor,
+  ExtractedFact,
   QueryPlanner,
   Answerer,
 } from "./core/ports.js";

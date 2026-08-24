@@ -1,108 +1,28 @@
 {
-  "name": "hymem",
-  "version": "0.3.0",
-  "description": "Multi-tenant temporal knowledge-graph agent memory with pluggable stores \u2014 CLI, library, and MCP server",
+  "name": "hymem-workspace",
+  "private": true,
   "type": "module",
-  "license": "Apache-2.0",
-  "keywords": [
-    "adapter",
-    "agent-memory",
-    "ai",
-    "hydradb",
-    "knowledge-graph",
-    "longmemeval",
-    "mcp",
-    "memory",
-    "multi-tenant",
-    "neo4j",
-    "postgres",
-    "sql",
-    "sqlite",
-    "temporal",
-    "tenancy"
+  "workspaces": [
+    "packages/*"
   ],
   "engines": {
     "node": ">=22.17"
   },
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    },
-    "./stores/memory": {
-      "types": "./dist/stores/memory-store.d.ts",
-      "import": "./dist/stores/memory-store.js"
-    },
-    "./stores/cypher": {
-      "types": "./dist/stores/cypher/index.d.ts",
-      "import": "./dist/stores/cypher/index.js"
-    },
-    "./llm": {
-      "types": "./dist/llm/index.d.ts",
-      "import": "./dist/llm/index.js"
-    },
-    "./testing": {
-      "types": "./dist/testing/conformance.d.ts",
-      "import": "./dist/testing/conformance.js"
-    },
-    "./stores/sql": {
-      "types": "./dist/stores/sql/index.d.ts",
-      "import": "./dist/stores/sql/index.js"
-    }
-  },
-  "bin": {
-    "hymem": "./dist/cli.js",
-    "hymem-mcp": "./dist/mcp-server.js"
-  },
-  "files": [
-    "dist",
-    "README.md",
-    "LICENSE",
-    "scripts/run-hydra.sh",
-    ".env.example"
-  ],
   "scripts": {
-    "build": "tsc",
-    "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run typecheck && npm run build",
-    "bootstrap": "tsx src/bootstrap.ts",
-    "cli": "tsx src/cli.ts",
-    "ingest": "tsx src/cli.ts ingest",
-    "ask": "tsx src/cli.ts ask",
-    "eval": "tsx src/eval.ts",
-    "mcp": "tsx src/mcp-server.ts",
-    "conformance": "tsx --no-warnings src/testing/run-conformance.ts",
-    "inspect": "tsx src/cli.ts inspect",
-    "sql-checks": "tsx --no-warnings src/testing/run-sql-checks.ts",
-    "schema": "tsx --no-warnings src/cli.ts schema",
-    "tenancy-checks": "tsx --no-warnings src/testing/run-tenancy-checks.ts",
-    "check": "npm run typecheck && npm run conformance memory && npm run conformance sqlite && npm run sql-checks && npm run tenancy-checks"
-  },
-  "dependencies": {
-    "@ai-sdk/anthropic": "^4.0.40",
-    "@ai-sdk/google": "^4.0.0",
-    "@ai-sdk/openai": "^4.0.44",
-    "@ai-sdk/openai-compatible": "^3.0.32",
-    "@modelcontextprotocol/sdk": "^1.30.0",
-    "ai": "^7.0.70",
-    "commander": "^15.0.0",
-    "neo4j-driver": "~5.27.0",
-    "zod": "^3.25.0"
+    "build": "tsc --build",
+    "clean": "tsc --build --clean",
+    "typecheck": "tsc --build --dry",
+    "conformance": "npm run -w @hymem/cli conformance --",
+    "sql-checks": "npm run -w @hymem/cli sql-checks",
+    "tenancy-checks": "npm run -w @hymem/cli tenancy-checks",
+    "cli": "npm run -w @hymem/cli cli --",
+    "schema": "npm run -w @hymem/cli schema --",
+    "mcp": "npm run -w @hymem/cli mcp",
+    "check": "npm run build && npm run conformance memory && npm run conformance sqlite && npm run sql-checks && npm run tenancy-checks"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "tsx": "^4.0.0",
     "typescript": "^5.9.0"
-  },
-  "peerDependencies": {
-    "ai": "^7",
-    "pg": "^8"
-  },
-  "peerDependenciesMeta": {
-    "pg": {
-      "optional": true
-    }
   }
 }

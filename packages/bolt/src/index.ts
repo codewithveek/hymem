@@ -1,17 +1,23 @@
 /**
- * Bolt driver seam. One CypherDriver is all the Cypher-family store needs, so
- * HydraDB, Neo4j and Memgraph share a single MemoryStore implementation and
- * differ only in a Dialect (see dialect.ts).
+ * @hymem/bolt — graph storage for hymem over the Bolt protocol.
  *
- * Nothing here is hymem-specific — it is connection management and the
- * HydraDB handshake workaround, lifted verbatim from the original hydra.ts.
+ *   import { createMemory } from "hymem";
+ *   import { hydradb } from "@hymem/bolt";
+ *
+ *   const memory = createMemory({
+ *     store: hydradb({ url: "bolt://127.0.0.1:7687", token: process.env.HYDRA_TOKEN }),
+ *     model,
+ *     namespace: "org_42",
+ *   });
+ *
+ * One package rather than @hymem/hydradb + @hymem/neo4j + @hymem/memgraph,
+ * because all three speak Bolt and share the same single peer dependency. The
+ * reason SQL is split per engine is that `pg` and `better-sqlite3` are
+ * genuinely different installs; here there is nothing to separate.
  */
-import neo4j, { type Driver, type Integer } from "neo4j-driver";
-
-export interface CypherDriver {
-  run<T = Record<string, unknown>>(query: string, params?: Record<string, unknown>): Promise<T[]>;
-  close(): Promise<void>;
-}
+import neo4j, { type Driver } from "neo4j-driver";
+import { cypherStore, HYDRADB, MEMGRAPH, NEO4J } from "hymem/stores/cypher";
+import type { CypherDriver, Dialect, MemoryStore } from "hymem/stores/cypher";
 
 export interface BoltOptions {
   url: string;
@@ -68,6 +74,9 @@ export function boltDriver(options: BoltOptions): CypherDriver {
   };
 
   return {
+    // A plain JS number packs as FLOAT over Bolt and is rejected as a node id.
+    int: (value: number) => neo4j.int(value),
+
     async run<T>(query: string, params: Record<string, unknown> = {}): Promise<T[]> {
       for (let attempt = 0; ; attempt++) {
         const session = getDriver().session();
@@ -85,12 +94,13 @@ export function boltDriver(options: BoltOptions): CypherDriver {
           await session.close().catch(() => undefined);
           if (!isHandshakeFlake(error) || attempt >= HANDSHAKE_RETRIES) throw error;
           if (process.env.HYMEM_DEBUG) {
-            console.error(`[cypher] Bolt handshake flake, retrying (${attempt + 1}/${HANDSHAKE_RETRIES})`);
+            console.error(`[bolt] handshake flake, retrying (${attempt + 1}/${HANDSHAKE_RETRIES})`);
           }
           await backoff(attempt);
         }
       }
     },
+
     async close() {
       await driver?.close();
       driver = null;
@@ -98,6 +108,31 @@ export function boltDriver(options: BoltOptions): CypherDriver {
   };
 }
 
-/** Wrap a JS integer as a Bolt INT (required by dialects with integer ids). */
-export const int = (n: number): Integer => neo4j.int(n);
-export type { Integer };
+export interface BoltConnectOptions extends Partial<BoltOptions> {
+  /** Supply a pre-built driver instead of a url — useful for pooling or tests. */
+  driver?: CypherDriver;
+}
+
+function connect(
+  options: BoltConnectOptions,
+  dialect: Dialect,
+  defaultUrl: string,
+): MemoryStore {
+  const driver = options.driver ?? boltDriver({ ...options, url: options.url ?? defaultUrl });
+  return cypherStore({ driver, dialect });
+}
+
+/** HydraDB over Bolt. Token auth by default; pass user/password for basic auth. */
+export const hydradb = (options: BoltConnectOptions = {}): MemoryStore =>
+  connect(options, HYDRADB, "neo4j://127.0.0.1:7687");
+
+/** Neo4j 5.x over Bolt. */
+export const neo4jStore = (options: BoltConnectOptions = {}): MemoryStore =>
+  connect(options, NEO4J, "neo4j://127.0.0.1:7687");
+
+/** Memgraph over Bolt. */
+export const memgraph = (options: BoltConnectOptions = {}): MemoryStore =>
+  connect(options, MEMGRAPH, "bolt://127.0.0.1:7687");
+
+export { HYDRADB, NEO4J, MEMGRAPH } from "hymem/stores/cypher";
+export type { CypherDriver, Dialect } from "hymem/stores/cypher";

@@ -1,0 +1,38 @@
+{
+  "name": "@hymem/postgres",
+  "type": "module",
+  "version": "0.4.0",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22.17"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "description": "Postgres storage adapter for hymem",
+  "keywords": [
+    "hymem",
+    "agent-memory",
+    "postgres",
+    "pg"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "hymem": "0.4.0"
+  },
+  "peerDependencies": {
+    "pg": "^8"
+  }
+}

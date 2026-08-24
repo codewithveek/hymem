@@ -14,8 +14,8 @@
  */
 import { readFileSync, appendFileSync } from "node:fs";
 import { memoryFromEnv } from "./env.js";
-import { ABSTAIN_ANSWER } from "./core/memory.js";
-import type { SessionInput } from "./core/types.js";
+import { ABSTAIN_ANSWER } from "hymem";
+import type { SessionInput } from "hymem";
 
 interface LongMemEvalInstance {
   question_id: string;

@@ -11,10 +11,8 @@ import { createAnthropic } from "@ai-sdk/anthropic";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import type { LanguageModel } from "ai";
-import { createMemory, type Memory } from "./core/memory.js";
-import { memoryStore } from "./stores/memory-store.js";
-import { hydradb, memgraph, neo4j } from "./stores/cypher/index.js";
-import type { MemoryStore } from "./core/ports.js";
+import { createMemory, memoryStore, type Memory, type MemoryStore } from "hymem";
+import { hydradb, memgraph, neo4jStore } from "@hymem/bolt";
 
 try {
   process.loadEnvFile(".env"); // Node >= 20.12; real env vars still win
@@ -73,13 +71,13 @@ export async function storeFromEnv(): Promise<MemoryStore> {
     case "memory":
       return memoryStore();
     case "neo4j":
-      return neo4j({ url, user, password, token });
+      return neo4jStore({ url, user, password, token });
     case "memgraph":
       return memgraph({ url, user, password, token });
     case "hydradb":
       return hydradb({ url, token });
     case "postgres": {
-      const { postgres } = await import("./stores/sql/index.js");
+      const { postgres } = await import("@hymem/postgres");
       const { Pool } = await import("pg");
       const connectionString = process.env.DATABASE_URL ?? process.env.PG_URL;
       if (!connectionString) {
@@ -88,7 +86,7 @@ export async function storeFromEnv(): Promise<MemoryStore> {
       return postgres({ client: new Pool({ connectionString }), migrate, tablePrefix });
     }
     case "sqlite": {
-      const { sqlite } = await import("./stores/sql/index.js");
+      const { sqlite } = await import("@hymem/sqlite");
       const { DatabaseSync } = await import("node:sqlite");
       return sqlite({
         database: new DatabaseSync(process.env.SQLITE_PATH ?? "hymem.db"),

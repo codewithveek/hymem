@@ -4,15 +4,15 @@
  * contract: schema-ownership modes and the generated DDL.
  */
 import { DatabaseSync } from "node:sqlite";
+import { sqlite } from "@hymem/sqlite";
 import {
-  sqlite,
   schemaScript,
   assertSafeTablePrefix,
   MissingSchemaError,
   UnsafeTablePrefixError,
   POSTGRES,
   SQLITE,
-} from "../stores/sql/index.js";
+} from "hymem/stores/sql";
 
 const NS = "tenant_a";
 
