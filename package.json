@@ -18,11 +18,17 @@
     "cli": "npm run -w @hymem/cli cli --",
     "schema": "npm run -w @hymem/cli schema --",
     "mcp": "npm run -w @hymem/cli mcp",
-    "check": "npm run build && npm run conformance memory && npm run conformance sqlite && npm run sql-checks && npm run tenancy-checks"
+    "check": "npm run build && npm run conformance memory && npm run conformance sqlite && npm run sql-checks && npm run tenancy-checks",
+    "publish:dry": "npm publish --workspaces --dry-run",
+    "publish:all": "npm publish --workspaces --access public"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "tsx": "^4.0.0",
     "typescript": "^5.9.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/codewithveek/hymem.git"
   }
 }

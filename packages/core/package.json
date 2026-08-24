@@ -1,14 +1,6 @@
 {
   "name": "hymem",
-  "type": "module",
-  "version": "0.4.0",
-  "license": "Apache-2.0",
-  "engines": {
-    "node": ">=22.17"
-  },
-  "publishConfig": {
-    "access": "public"
-  },
+  "version": "0.1.0",
   "description": "Multi-tenant temporal knowledge-graph agent memory with pluggable stores",
   "keywords": [
     "agent-memory",
@@ -20,6 +12,20 @@
     "mcp",
     "ai"
   ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/codewithveek/hymem.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/codewithveek/hymem#readme",
+  "bugs": {
+    "url": "https://github.com/codewithveek/hymem/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.17"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -49,6 +55,9 @@
     "README.md",
     "LICENSE"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "zod": "^3.25.0"
   },
