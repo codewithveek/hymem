@@ -4,8 +4,15 @@ import { Command } from "commander";
 import { memoryFromEnv, namespaceFromEnv, storeFromEnv } from "./env.js";
 import { runStoreConformance, CONFORMANCE_TEST_COUNT } from "./testing/conformance.js";
 import type { SessionInput } from "./core/types.js";
+import type { Memory } from "./core/memory.js";
 
-const memory = await memoryFromEnv();
+/**
+ * Built on first use, not at startup: `schema` and `conformance` need neither a
+ * namespace nor a database connection, and requiring MEM_NAMESPACE to print DDL
+ * would be absurd.
+ */
+let memoryInstance: Memory | undefined;
+const getMemory = async (): Promise<Memory> => (memoryInstance ??= await memoryFromEnv());
 
 const program = new Command();
 
@@ -14,7 +21,7 @@ program
   .description("Temporal knowledge-graph agent memory — store-agnostic, multi-tenant")
   .version("0.3.0")
   .hook("postAction", async () => {
-    await memory.close();
+    await memoryInstance?.close();
   });
 
 program
@@ -23,7 +30,7 @@ program
   .argument("<file>", "path to a SessionInput[] JSON file")
   .action(async (file: string) => {
     const sessions = JSON.parse(readFileSync(file, "utf8")) as SessionInput[];
-    const factCount = await memory.rememberAll(sessions, (session, facts) => {
+    const factCount = await (await getMemory()).rememberAll(sessions, (session, facts) => {
       console.error(`  ingested ${session.id} (${facts.length} facts)`);
     });
     console.log(`Done: ${sessions.length} sessions, ${factCount} facts.`);
@@ -35,7 +42,7 @@ program
   .argument("<question...>", "natural-language question")
   .option("--facts", "also print the supporting facts")
   .action(async (parts: string[], options: { facts?: boolean }) => {
-    const answered = await memory.ask(parts.join(" "));
+    const answered = await (await getMemory()).ask(parts.join(" "));
     console.log(answered.answer);
     if (options.facts && !answered.abstained) {
       console.log(`\n--- supporting facts ---\n${answered.contextBlock}`);
@@ -48,7 +55,7 @@ program
   .argument("<question...>", "natural-language question")
   .option("--json", "output as JSON")
   .action(async (parts: string[], options: { json?: boolean }) => {
-    const recalled = await memory.recall(parts.join(" "));
+    const recalled = await (await getMemory()).recall(parts.join(" "));
     if (options.json) console.log(JSON.stringify(recalled.facts, null, 2));
     else console.log(recalled.abstained ? "Not in memory." : recalled.contextBlock);
   });
@@ -59,6 +66,7 @@ program
   .argument("[entity]", "entity name filter, e.g. user")
   .option("--json", "output as JSON")
   .action(async (entity: string | undefined, options: { json?: boolean }) => {
+    const memory = await getMemory();
     const facts = await memory.facts(entity);
     if (options.json) {
       console.log(JSON.stringify(facts, null, 2));
@@ -77,7 +85,7 @@ program
   .description("Delete facts by id (ids from `hymem inspect`)")
   .argument("<ids...>", "fact ids")
   .action(async (ids: string[]) => {
-    await memory.forget(ids);
+    await (await getMemory()).forget(ids);
     console.log(`Deleted ${ids.length} fact(s).`);
   });
 
@@ -101,7 +109,7 @@ program
   .description("Delete every fact in the configured namespace")
   .action(async () => {
     const namespace = namespaceFromEnv();
-    await memory.clear();
+    await (await getMemory()).clear();
     console.log(`Wiped namespace "${namespace}".`);
   });
 

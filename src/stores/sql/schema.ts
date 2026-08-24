@@ -26,7 +26,32 @@ export interface TableNames {
   supersedes: string;
 }
 
+/**
+ * Table and column names cannot be bind parameters — SQL only binds values — so
+ * an identifier reaching a statement is always string interpolation. The prefix
+ * is caller-supplied configuration, which makes it the one identifier here that
+ * is not a compile-time constant. Validate it rather than trust it.
+ */
+const SAFE_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+export class UnsafeTablePrefixError extends Error {
+  constructor(prefix: string) {
+    super(
+      `hymem: table prefix ${JSON.stringify(prefix)} is not a valid SQL identifier. ` +
+        "Use only letters, digits and underscores, starting with a letter or underscore " +
+        '(for example "hymem_" or "agent_mem_").',
+    );
+    this.name = "UnsafeTablePrefixError";
+  }
+}
+
+export function assertSafeTablePrefix(prefix: string): void {
+  // An empty prefix is fine: it yields bare `facts`, `sessions`, and so on.
+  if (prefix !== "" && !SAFE_IDENTIFIER.test(prefix)) throw new UnsafeTablePrefixError(prefix);
+}
+
 export function tableNames(prefix = "hymem_"): TableNames {
+  assertSafeTablePrefix(prefix);
   return {
     facts: `${prefix}facts`,
     sessions: `${prefix}sessions`,

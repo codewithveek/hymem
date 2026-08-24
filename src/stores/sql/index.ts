@@ -17,6 +17,8 @@ import type { MigrateMode } from "./schema.js";
 export interface SqlConnectOptions {
   migrate?: MigrateMode;
   tablePrefix?: string;
+  /** Override the dialect's bind-parameter cap (unusual builds only). */
+  maxParameters?: number;
 }
 
 export interface PostgresOptions extends SqlConnectOptions {
@@ -31,6 +33,7 @@ export function postgres(options: PostgresOptions): MemoryStore {
     driver: pgDriver(options.client, { closeOnEnd: options.closeOnEnd }),
     migrate: options.migrate,
     tablePrefix: options.tablePrefix,
+    maxParameters: options.maxParameters,
   });
 }
 
@@ -44,6 +47,7 @@ export function sqlite(options: SqliteOptions): MemoryStore {
     driver: sqliteDriver(options.database),
     migrate: options.migrate,
     tablePrefix: options.tablePrefix,
+    maxParameters: options.maxParameters,
   });
 }
 
@@ -58,7 +62,9 @@ export {
   schemaScript,
   tableNames,
   createTableStatements,
+  assertSafeTablePrefix,
   MissingSchemaError,
+  UnsafeTablePrefixError,
   type MigrateMode,
   type TableNames,
 } from "./schema.js";

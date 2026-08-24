@@ -23,6 +23,12 @@ export interface SqlStoreOptions {
   migrate?: MigrateMode;
   /** Table-name prefix, so hymem never collides with your own `facts` table. */
   tablePrefix?: string;
+  /**
+   * Override the dialect's bind-parameter cap. Needed only on an unusual build
+   * — an old SQLite compiled with SQLITE_MAX_VARIABLE_NUMBER=999, say. Lower is
+   * always safe; it just means more round trips.
+   */
+  maxParameters?: number;
 }
 
 interface FactRow {
@@ -46,7 +52,7 @@ export function sqlStore(options: SqlStoreOptions): MemoryStore {
   const { driver } = options;
   const { dialect } = driver;
   const prefix = options.tablePrefix ?? "hymem_";
-  const tables: TableNames = tableNames(prefix);
+  const tables: TableNames = tableNames(prefix); // validates the prefix
   const migrate: MigrateMode = options.migrate ?? "check";
 
   const capabilities: StoreCapabilities = {
@@ -117,25 +123,45 @@ export function sqlStore(options: SqlStoreOptions): MemoryStore {
    */
   async function withEntities(namespace: string, rows: FactRow[]): Promise<StoredFact[]> {
     if (rows.length === 0) return [];
-    const binder = newBinder();
-    const namespaceParam = binder.bind(namespace);
-    const idList = binder.list(rows.map((row) => row.id));
-    const links = await driver.query<{ fact_id: string; entity: string }>(
-      `SELECT fact_id, entity FROM ${tables.factEntities}
-       WHERE namespace = ${namespaceParam} AND fact_id IN (${idList})`,
-      binder.values,
-    );
     const entitiesByFactId = new Map<string, string[]>();
-    for (const link of links) {
-      const existing = entitiesByFactId.get(link.fact_id);
-      if (existing) existing.push(link.entity);
-      else entitiesByFactId.set(link.fact_id, [link.entity]);
+    for (const batch of chunked(rows)) {
+      const binder = newBinder();
+      const namespaceParam = binder.bind(namespace);
+      const idList = binder.list(batch.map((row) => row.id));
+      const links = await driver.query<{ fact_id: string; entity: string }>(
+        `SELECT fact_id, entity FROM ${tables.factEntities}
+         WHERE namespace = ${namespaceParam} AND fact_id IN (${idList})`,
+        binder.values,
+      );
+      for (const link of links) {
+        const existing = entitiesByFactId.get(link.fact_id);
+        if (existing) existing.push(link.entity);
+        else entitiesByFactId.set(link.fact_id, [link.entity]);
+      }
     }
     return rows.map((row) => toStoredFact(row, entitiesByFactId.get(row.id) ?? []));
   }
 
   const ascending = (earlier: StoredFact, later: StoredFact) =>
     earlier.observedAt.localeCompare(later.observedAt);
+
+  /**
+   * Split a list-valued predicate into statements that stay under the dialect's
+   * bind-parameter cap. `listFacts` over a large namespace and `deleteFacts`
+   * with many ids are both unbounded, and exceeding the cap is a hard driver
+   * error rather than a slow query.
+   *
+   * `reserved` leaves room for the other parameters in the same statement.
+   */
+  function chunked<T>(items: readonly T[], reserved = 4): T[][] {
+    const size = Math.max(1, (options.maxParameters ?? dialect.maxParameters) - reserved);
+    if (items.length <= size) return [items as T[]];
+    const batches: T[][] = [];
+    for (let start = 0; start < items.length; start += size) {
+      batches.push(items.slice(start, start + size) as T[]);
+    }
+    return batches;
+  }
 
   return {
     capabilities,
@@ -344,15 +370,18 @@ export function sqlStore(options: SqlStoreOptions): MemoryStore {
       if (factIds.length === 0) return;
       // Narrow to ids this namespace actually owns, so a stray id from another
       // tenant deletes nothing.
-      const scopeBinder = newBinder();
-      const owned = await driver.query<{ id: string }>(
-        `SELECT id FROM ${tables.facts}
-         WHERE namespace = ${scopeBinder.bind(namespace)}
-           AND id IN (${scopeBinder.list(factIds)})`,
-        scopeBinder.values,
-      );
-      factIds = owned.map((row) => row.id);
-      if (factIds.length === 0) return;
+      const owned: string[] = [];
+      for (const batch of chunked(factIds)) {
+        const scopeBinder = newBinder();
+        const rows = await driver.query<{ id: string }>(
+          `SELECT id FROM ${tables.facts}
+           WHERE namespace = ${scopeBinder.bind(namespace)}
+             AND id IN (${scopeBinder.list(batch)})`,
+          scopeBinder.values,
+        );
+        owned.push(...rows.map((row) => row.id));
+      }
+      if (owned.length === 0) return;
       // Explicit cascade rather than FK ON DELETE: SQLite enforces foreign
       // keys only when the connection enables them, so doing it here keeps
       // behaviour identical on every engine.
@@ -362,11 +391,13 @@ export function sqlStore(options: SqlStoreOptions): MemoryStore {
         [tables.supersedes, "old_fact_id"],
         [tables.facts, "id"],
       ] as const) {
-        const binder = newBinder();
-        await driver.query(
-          `DELETE FROM ${table} WHERE ${column} IN (${binder.list(factIds)})`,
-          binder.values,
-        );
+        for (const batch of chunked(owned)) {
+          const binder = newBinder();
+          await driver.query(
+            `DELETE FROM ${table} WHERE ${column} IN (${binder.list(batch)})`,
+            binder.values,
+          );
+        }
       }
     },
 

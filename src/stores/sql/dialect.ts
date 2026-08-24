@@ -30,6 +30,18 @@ export interface SqlDialect {
   dataModifyingCte: boolean;
   /** `UPDATE`/`DELETE ... RETURNING` is supported (Postgres; SQLite >= 3.35). */
   returning: boolean;
+  /**
+   * Hard cap on bind parameters in one statement. Exceeding it is a driver
+   * error, not a slow query, so any list-valued predicate must be chunked
+   * below this.
+   *
+   * Postgres allows 65535. SQLite's cap is the compile-time
+   * SQLITE_MAX_VARIABLE_NUMBER, which has defaulted to 32766 since 3.32 (2020)
+   * and is 32766 in Node 22's bundled build — verified, not assumed. Builds
+   * older than that use 999; override `maxParameters` on the store if you are
+   * on one. Setting it too low only costs extra round trips, so it fails safe.
+   */
+  maxParameters: number;
 }
 
 /** Postgres and SQLite differ only in placeholder style. */
@@ -49,6 +61,7 @@ export const POSTGRES: SqlDialect = {
   textType: "TEXT",
   dataModifyingCte: true,
   returning: true,
+  maxParameters: 65535,
 };
 
 export const SQLITE: SqlDialect = {
@@ -61,6 +74,7 @@ export const SQLITE: SqlDialect = {
   textType: "TEXT",
   dataModifyingCte: false,
   returning: true, // SQLite >= 3.35, which is well below Node 22's bundled build
+  maxParameters: 32766,
 };
 
 /**
