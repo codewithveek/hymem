@@ -23,8 +23,8 @@
     "node": ">=22.17"
   },
   "bin": {
-    "hymem": "./dist/cli.js",
-    "hymem-mcp": "./dist/mcp-server.js"
+    "hymem": "dist/cli.js",
+    "hymem-mcp": "dist/mcp-server.js"
   },
   "files": [
     "dist",
