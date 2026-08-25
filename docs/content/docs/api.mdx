@@ -1,0 +1,102 @@
+---
+title: API reference
+description: createMemory, the Memory interface, and the four ports.
+---
+
+## `createMemory(options)`
+
+| Option | Type | Notes |
+| --- | --- | --- |
+| `store` | `MemoryStore` | **Required.** Where facts live. |
+| `namespace` | `string` | **Required.** Tenant boundary; no default. |
+| `model` | `LanguageModel` | Fills extractor, planner and answerer with LLM-backed defaults. |
+| `speaker` | `string` | Default identity for the human, when one person owns this memory. |
+| `speakerToken` | `string` | Placeholder the extractor and planner use. Default `"user"`. |
+| `extractor` | `Extractor` | Transcript → facts. Override for rules-based extraction. |
+| `planner` | `QueryPlanner` | Question → lookup keys. |
+| `answerer` | `Answerer \| null` | Context → prose. `null` builds a recall-only memory. |
+| `maxFacts` | `number` | Upper bound on facts pulled into a recall. Default `24`. |
+| `abstainThreshold` | `number` | Abstain below this many supporting facts. Default `1`. |
+
+`model` is sugar — it fills all three LLM stages. Override any one individually.
+
+## `Memory`
+
+| Method | Returns |
+| --- | --- |
+| `remember(session, prevSessionId?)` | `Fact[]` |
+| `rememberAll(sessions, onProgress?)` | `number` |
+| `recall(question, { speaker }?)` | `{ facts, contextBlock, abstained, link }` |
+| `ask(question, { speaker }?)` | `{ answer, contextBlock, abstained }` |
+| `facts(entity?)` | `StoredFact[]` |
+| `forget(ids)` | `void` |
+| `clear()` | wipes this namespace only |
+| `close()` | releases the store's connections |
+| `store` / `namespace` | the underlying store and tenant |
+
+## Types
+
+```ts
+interface SessionInput {
+  id: string;
+  ts: string;            // ISO-8601; drives chronology
+  idx: number;
+  turns: { role: "user" | "assistant"; content: string }[];
+  speaker?: string;      // stable identity, for shared namespaces
+  speakerName?: string;  // display alias, linked alongside the id
+}
+
+interface StoredFact {
+  id: string;
+  namespace: string;
+  subject: string;
+  attribute: string;
+  value: string;
+  text: string;
+  entities: string[];
+  observedAt: string;
+  sessionId: string;
+  status: "active" | "superseded";
+  validFrom: string;
+  validTo: string | null;
+}
+```
+
+## Ports
+
+```ts
+interface Extractor    { extract(session: SessionInput): Promise<ExtractedFact[]> }
+interface QueryPlanner { plan(question: string): Promise<QueryLink> }
+interface Answerer     { answer(question: string, context: string): Promise<string> }
+```
+
+An extractor returns **triples, not identity** — core assigns `id` and
+`namespace` and applies the speaker rewrite afterwards, so a custom extractor
+cannot get hashing, canonicalisation, or tenancy wrong.
+
+```ts
+createMemory({
+  store: memoryStore(),
+  namespace: "demo",
+  extractor: myRulesExtractor,   // no LLM on the write path
+  answerer: null,                // recall-only
+});
+```
+
+## Pure algorithms
+
+Exported and importing nothing — usable without `createMemory` or any model:
+
+```ts
+import { ingestSession, recall, formatContext, factId, canonEntity } from "@hymem/core";
+```
+
+## Entry points
+
+| Import | Contents |
+| --- | --- |
+| `@hymem/core` | `createMemory`, `memoryStore`, algorithms, types |
+| `@hymem/core/stores/sql` | `sqlStore`, `sql()`, dialects, schema helpers |
+| `@hymem/core/stores/cypher` | `cypherStore`, dialects, `CypherDriver` |
+| `@hymem/core/llm` | `llmExtractor`, `llmPlanner`, `llmAnswerer` |
+| `@hymem/core/testing` | `runStoreConformance` |

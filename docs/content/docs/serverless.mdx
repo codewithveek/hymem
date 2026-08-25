@@ -1,0 +1,76 @@
+---
+title: Serverless and edge
+description: Running hymem in Workers, Vercel Edge, and other short-lived runtimes.
+---
+
+`@hymem/core` runs on edge runtimes. It reads no global unchecked, and uses one
+Node builtin — `node:crypto` for `createHash`, which Cloudflare Workers supports
+**synchronously** under `nodejs_compat`.
+
+```toml
+# wrangler.toml
+compatibility_flags = ["nodejs_compat"]
+```
+
+## Pick an adapter that fits
+
+| Runtime | Use |
+| --- | --- |
+| Cloudflare Workers | `@hymem/d1`, or `@hymem/postgres` over Hyperdrive |
+| Vercel Edge / any fetch runtime | `@hymem/tidb` with `@tidbcloud/serverless` |
+| Per-request scratch memory | `memoryStore()` |
+
+`@hymem/sqlite` needs `node:sqlite` and will **not** run in a Worker.
+
+## Cloudflare D1
+
+```ts
+import { createMemory } from "@hymem/core";
+import { d1 } from "@hymem/d1";
+
+export default {
+  async fetch(request: Request, env: Env) {
+    const memory = createMemory({
+      store: d1({ database: env.DB }),
+      model,
+      namespace: `usr_${userId}`,
+    });
+    ...
+  },
+};
+```
+
+Two platform limits shape this adapter, and both are handled for you:
+
+- **100 bind parameters per statement** — roughly 300× tighter than SQLite's own
+  cap. Every list-valued predicate chunks below it automatically.
+- **No interactive transactions.** A Worker cannot hold one open across round
+  trips, so `atomicSupersede` is `false`. Single-writer ingest is correct; two
+  Workers racing for the same slot can both see it unclaimed. Serialise writes
+  per user with a Durable Object if that matters.
+
+Apply migrations with wrangler rather than at runtime — a Worker runs on every
+request, so `migrate: "auto"` would attempt schema work in the hot path.
+
+```bash
+npx hymem schema --dialect sqlite > migrations/0001_hymem.sql
+wrangler d1 migrations apply hymem
+```
+
+## TiDB Cloud
+
+```ts
+import { tidb } from "@hymem/tidb";
+import { connect } from "@tidbcloud/serverless";
+
+const store = tidb({ connection: connect({ url: process.env.DATABASE_URL }) });
+```
+
+The serverless driver speaks HTTP, so it works anywhere `fetch` does — and it
+supports interactive transactions, so `atomicSupersede` is `true`.
+
+## Connection lifecycle
+
+Build the memory per request and let the runtime reclaim it. Do not create a
+connection pool per invocation — use a driver designed for the runtime (D1's
+binding, TiDB's HTTP driver, Hyperdrive) rather than a raw TCP pool.

@@ -4,3 +4,5 @@ dist/
 eval-results.log
 *.tsbuildinfo
 hymem.db
+docs/.next/
+docs/.source/

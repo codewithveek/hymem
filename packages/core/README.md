@@ -10,7 +10,7 @@ hymem stores memory as **facts with lifetimes**:
 - **Structurally honest.** With no supporting facts, recall abstains *before* the model is asked.
 - **Inspectable.** Every fact traces to its source session and can be listed or deleted individually.
 - **Multi-tenant.** Every fact is scoped to a required `namespace`.
-- **Storage-agnostic.** One `MemoryStore` port; Postgres, SQLite, Neo4j, Memgraph, HydraDB and in-memory are interchangeable.
+- **Storage-agnostic.** One `MemoryStore` port; Postgres, SQLite, TiDB/MySQL, Cloudflare D1, Neo4j, Memgraph, HydraDB and in-memory are interchangeable.
 
 This package holds the memory model, the ports, the in-memory store, the SQL and Cypher store *logic*, and the conformance suite. It depends on `zod` and nothing else — every database dependency lives in a separate adapter package.
 
@@ -23,7 +23,7 @@ npm install @hymem/core ai @ai-sdk/openai
 Add a store when you outgrow the in-memory one:
 
 ```bash
-npm install @hymem/sqlite      # or @hymem/postgres, or @hymem/bolt
+npm install @hymem/sqlite      # or @hymem/postgres, @hymem/tidb, @hymem/d1, @hymem/bolt
 ```
 
 ## Quick start
@@ -144,7 +144,7 @@ The pure algorithms are exported and import nothing: `ingestSession`, `recall`, 
 
 ## Writing a store adapter
 
-Ten methods and a passing conformance run — 25 tests covering round-tripping, supersession, re-activation, idempotent re-ingest, ordering, limits, deletion, concurrency, and tenant isolation. No LLM, no API keys.
+Ten methods and a passing conformance run — 28 tests covering round-tripping, supersession, re-activation, idempotent re-ingest, ordering, limits, deletion, concurrency, and tenant isolation. No LLM, no API keys.
 
 ```ts
 import { runStoreConformance } from "@hymem/core/testing";

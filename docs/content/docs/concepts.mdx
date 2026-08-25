@@ -1,0 +1,71 @@
+---
+title: Core concepts
+description: Facts, supersession, recall, and why abstention is structural.
+---
+
+## Facts
+
+Extraction turns a transcript into triples — `(subject, attribute, value)` — plus
+a sentence, the entities involved, and the source session.
+
+A fact's identity is `hash(namespace, subject, attribute, value)`. Re-stating
+something is therefore idempotent, and re-ingesting an entire history changes
+nothing. That property is what makes replaying a conversation log safe.
+
+## Supersession
+
+Two facts collide when they share `(subject, attribute)` inside a namespace but
+hold different values. The later one wins:
+
+- the earlier fact is marked `superseded` and stamped with `validTo`
+- a link records what replaced what
+
+Nothing is destroyed, so history stays queryable. Restating an old value
+*re-activates* it — moving back to Atlanta reopens that fact rather than creating
+a third one.
+
+<Callout type="info" title="One method, deliberately">
+`supersede()` closes the old facts, records the chain, and returns the closed ids
+in a **single** port call rather than find → close → link. Those three steps carry
+an invariant no caller-sequenced version can hold: between the find and the close,
+another writer can claim the same slot and both end up active.
+
+Keeping it inside the port lets each engine enforce it with what it has — a
+data-modifying CTE on Postgres, a transaction on SQLite and TiDB, `executeWrite`
+on Neo4j. Engines that cannot say so through `capabilities.atomicSupersede`.
+</Callout>
+
+## Recall and abstention
+
+A question is mapped to lookup keys — which entities, which attribute slots, and
+whether it asks about *now*, a *point in time*, or a *change*. Facts are then
+fetched, filtered against the timeline, and rendered chronologically.
+
+If fewer than `abstainThreshold` facts support the question, `recall()` returns
+`abstained: true` and `ask()` returns a fixed refusal **without calling the
+model**.
+
+This is deliberate and it is the point. A model handed an empty context will
+usually produce something plausible. Refusing before the call makes "I don't
+know" a property of the system rather than a hope about the prompt.
+
+## Temporal modes
+
+| Mode | Question shape | What it returns |
+| --- | --- | --- |
+| `current` | "where do I live?" | active facts only |
+| `point_in_time` | "where did I live in May?" | facts whose interval covers that instant |
+| `history` | "when did I move?" | every fact, superseded included |
+
+## The pipeline
+
+```
+sessions ──▶ Extractor ──▶ facts ──▶ store.putFacts ──▶ store.supersede
+                                                              │
+question ──▶ QueryPlanner ──▶ lookup keys ──▶ store.search ───┤
+                                                              ▼
+                              0 facts → abstain      Answerer → prose
+```
+
+Four ports, all replaceable: `MemoryStore`, `Extractor`, `QueryPlanner`, and the
+optional `Answerer`. See the [API reference](/docs/api).

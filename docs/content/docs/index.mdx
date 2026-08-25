@@ -1,0 +1,58 @@
+---
+title: Introduction
+description: Temporal, multi-tenant memory for AI agents with pluggable storage.
+---
+
+Agents forget between sessions. Bolting a vector store on gets you *similar* text, but it cannot tell you that the user moved to Denver in July and used to live in Atlanta — and it will happily invent an answer when it has nothing.
+
+hymem stores memory as **facts with lifetimes**, not embeddings.
+
+## What that buys you
+
+<Cards>
+  <Card title="Bitemporal facts" href="/docs/concepts">
+    Every fact carries `validFrom` / `validTo`. A later contradiction *closes* the
+    old value instead of deleting it, so "where do they live?" and "where did they
+    live before?" both have real answers.
+  </Card>
+  <Card title="Honest abstention" href="/docs/concepts#recall-and-abstention">
+    With no supporting facts, recall abstains *before* the model is asked. The
+    difference between a memory that says "I don't know" and one that confabulates.
+  </Card>
+  <Card title="Multi-tenant by default" href="/docs/tenancy">
+    Every fact is scoped to a required `namespace`. One database serves every user
+    or organisation — no connection pool per tenant.
+  </Card>
+  <Card title="Seven storage engines" href="/docs/stores">
+    Postgres, SQLite, TiDB/MySQL, Cloudflare D1, Neo4j, Memgraph, HydraDB — all
+    behind one `MemoryStore` port, all verified by the same conformance suite.
+  </Card>
+</Cards>
+
+## Install
+
+```bash
+npm install @hymem/core @hymem/sqlite ai @ai-sdk/openai
+```
+
+```ts
+import { createMemory, memoryStore } from "@hymem/core";
+import { openai } from "@ai-sdk/openai";
+
+const memory = createMemory({
+  store: memoryStore(),
+  model: openai("gpt-4o-mini"),
+  namespace: "demo",
+});
+
+await memory.remember(session);
+await memory.ask("Where do I live now?");
+```
+
+Continue to the [quick start](/docs/quickstart).
+
+## For agents
+
+Every page here is available as raw markdown — append `.md` to any docs URL, or
+send `Accept: text/markdown`. There is also [`/llms.txt`](/llms.txt) for an index
+and [`/llms-full.txt`](/llms-full.txt) for the whole corpus in one response.

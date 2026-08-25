@@ -21,7 +21,9 @@
     "mcp": "npm run -w @hymem/cli mcp",
     "check": "npm run build && npm run conformance memory && npm run conformance sqlite && npm run core-checks && npm run sql-checks && npm run tenancy-checks",
     "publish:dry": "npm publish --workspaces --dry-run",
-    "publish:all": "npm publish --workspaces --access public"
+    "publish:all": "npm publish --workspaces --access public",
+    "docs": "npm --prefix docs run dev",
+    "docs:build": "npm --prefix docs run build"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

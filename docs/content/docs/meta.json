@@ -1,0 +1,20 @@
+{
+  "title": "Documentation",
+  "pages": [
+    "index",
+    "quickstart",
+    "---Concepts---",
+    "concepts",
+    "tenancy",
+    "---Reference---",
+    "api",
+    "cli",
+    "mcp",
+    "---Storage---",
+    "stores",
+    "adapters",
+    "schema",
+    "---Deploying---",
+    "serverless"
+  ]
+}

@@ -1,0 +1,52 @@
+---
+title: Schema ownership
+description: hymem declares the schema; you apply it.
+---
+
+Column names are an implementation detail. The moment they are hand-written into
+your migration they become public API and every future change is a breaking one.
+So the definition lives in the adapter, and only the *application path* is yours.
+
+```ts
+postgres({ client: pool, migrate: "check" })  // default
+postgres({ client: pool, migrate: "auto" })   // development
+postgres({ client: pool, migrate: "off" })    // you ran the DDL yourself
+```
+
+| Mode | Behaviour |
+| --- | --- |
+| `check` | Verify the tables exist; throw an error naming the fix if not. **Default.** |
+| `auto` | Create them if absent. Fine for local development. |
+| `off` | Do nothing. |
+
+<Callout type="warn" title="Why `auto` is not the default">
+Silently creating tables in production is how you get schema drift nobody
+notices. For Drizzle or Prisma users it is worse: it desyncs the database from
+your schema file, so the next `drizzle-kit generate` produces a bogus diff.
+
+`check` turns `relation "hymem_facts" does not exist` into an error that tells
+you exactly which command to run.
+</Callout>
+
+## Get the DDL
+
+```bash
+npx hymem schema --dialect postgres
+npx hymem schema --dialect sqlite
+npx hymem schema --dialect mysql       # TiDB and MySQL
+npx hymem schema --dialect d1
+npx hymem schema --prefix agentmem_    # custom table prefix
+```
+
+## The tables
+
+Four of them — facts, sessions, a fact↔entity join table, and a supersession
+chain. Entities are a join table rather than a JSON column because `search`
+anchors on entity and needs it indexable.
+
+Every index leads with `namespace`, so one tenant's volume never slows another's
+lookups.
+
+`tablePrefix` (default `hymem_`) keeps hymem clear of your own `facts` and
+`sessions` tables. Prefixes are validated as SQL identifiers — they are
+interpolated, not bound, because SQL cannot bind identifiers.

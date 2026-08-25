@@ -1,0 +1,54 @@
+---
+title: Writing an adapter
+description: Ten methods and a conformance suite.
+---
+
+An adapter is ten methods on `MemoryStore` and a passing conformance run.
+
+## The contract
+
+```ts
+interface MemoryStore {
+  readonly capabilities: { vectorSearch: boolean; atomicSupersede: boolean };
+
+  putSession(namespace, session, prevId?): Promise<void>;
+  putFacts(facts): Promise<void>;
+  linkEntities(namespace, links): Promise<void>;
+  supersede(incoming): Promise<string[]>;
+
+  search(query): Promise<StoredFact[]>;
+  getSupersededBy(namespace, factId): Promise<{ value; observedAt }[]>;
+
+  listFacts(namespace, entity?): Promise<StoredFact[]>;
+  deleteFacts(namespace, ids): Promise<void>;
+  clear(namespace): Promise<void>;
+  close(): Promise<void>;
+}
+```
+
+## Rules that adapters get wrong
+
+- **`putFacts` is an upsert keyed on `fact.id`.** A fact restated after being
+  superseded must **re-activate**: status back to `active`, `validFrom`
+  refreshed, `validTo` cleared. Ingesting the same history twice is a no-op.
+- **Ordering is always ascending by `observedAt`.**
+- **`search` returns the most recent `limit` matches, ordered ascending** — take
+  the newest N, then sort; not the first N.
+- **Nothing crosses a namespace.** Ever, in any method.
+
+## Verify it
+
+```ts
+import { runStoreConformance } from "@hymem/core/testing";
+
+const result = await runStoreConformance(() => myStore());
+console.log(`${result.passed} passed, ${result.failed.length} failed`);
+```
+
+28 tests covering round-tripping, supersession, re-activation, idempotent
+re-ingest, ordering, limits, deletion, concurrency, and tenant isolation. It
+needs **no LLM and no API keys** — a stub extractor stands in — so verifying your
+adapter costs nothing.
+
+Tests gated on a capability are skipped when a store declares it `false`, so
+declaring honestly is always better than declaring optimistically.

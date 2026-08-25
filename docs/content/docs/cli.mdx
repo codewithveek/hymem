@@ -1,0 +1,70 @@
+---
+title: CLI
+description: Ingest, query and inspect memory from a terminal.
+---
+
+```bash
+npm install -g @hymem/cli
+```
+
+## Configure
+
+```bash
+export MEM_NAMESPACE=local                 # required — the tenant boundary
+export MEM_STORE=sqlite SQLITE_PATH=memory.db MEM_MIGRATE=auto
+export LLM_API_KEY=sk-...
+```
+
+`MEM_NAMESPACE` has no default: every fact is scoped to it, and an accidentally
+shared namespace is a data leak.
+
+## Commands
+
+```bash
+hymem ingest sessions.json          # extract facts from a JSON file of sessions
+hymem ask "where do I live?"        # recall, then answer
+hymem ask "..." --facts             # also print the supporting facts
+hymem recall "..." --json           # raw facts, no synthesis
+hymem inspect [entity]              # browse what is stored
+hymem forget <ids...>               # delete specific facts
+hymem wipe                          # empty the configured namespace
+hymem conformance                   # verify the configured store
+hymem schema --dialect postgres     # print DDL
+```
+
+`hymem schema` and `hymem conformance` need neither a namespace nor a database.
+
+## Input format
+
+```json
+[
+  {
+    "id": "s1",
+    "ts": "2026-03-01T10:00:00Z",
+    "idx": 0,
+    "turns": [
+      { "role": "user", "content": "I just moved to Atlanta for a job at Delta." }
+    ]
+  }
+]
+```
+
+Add `"speaker": "usr_alice"` per session when several people share one namespace.
+
+## Environment
+
+| Variable | Purpose |
+| --- | --- |
+| `MEM_NAMESPACE` | **Required.** Tenant boundary. |
+| `MEM_STORE` | `sqlite` (default), `postgres`, `neo4j`, `memgraph`, `hydradb`, `memory` |
+| `MEM_SPEAKER` | Identity of the human, for shared namespaces |
+| `MEM_MAX_FACTS` | Facts per recall. Default `24` |
+| `MEM_ABSTAIN_THRESHOLD` | Abstain below this many facts. Default `1` |
+| `MEM_MIGRATE` / `MEM_TABLE_PREFIX` | SQL schema handling |
+| `DATABASE_URL` / `SQLITE_PATH` | SQL connection |
+| `HYDRA_BOLT_URL`, `HYDRA_TOKEN`, `BOLT_USER`, `BOLT_PASSWORD` | Graph connection |
+| `LLM_PROVIDER`, `LLM_MODEL`, `LLM_API_KEY`, `LLM_BASE_URL` | Model selection |
+
+`LLM_PROVIDER` accepts `openai`, `anthropic`, `google`, or `openai-compatible` —
+the last, with `LLM_BASE_URL`, covers OpenRouter, Groq, Ollama, LM Studio, vLLM
+and DashScope.

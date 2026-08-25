@@ -198,7 +198,7 @@ npx hymem schema --dialect postgres      # DDL for your own migration tool
 
 ### Writing your own adapter
 
-An adapter is ten methods and a passing conformance run — 25 tests covering round-tripping, supersession, re-activation, idempotent re-ingest, ordering, limits, deletion, concurrency, and tenant isolation. It needs no LLM and no API keys.
+An adapter is ten methods and a passing conformance run — 28 tests covering round-tripping, supersession, re-activation, idempotent re-ingest, ordering, limits, deletion, concurrency, and tenant isolation. It needs no LLM and no API keys.
 
 ```ts
 import { runStoreConformance } from "@hymem/core/testing";
