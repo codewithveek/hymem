@@ -1,0 +1,45 @@
+{
+  "name": "@hymem/sqlite",
+  "version": "0.1.0",
+  "description": "SQLite storage adapter for hymem (node:sqlite or better-sqlite3)",
+  "keywords": [
+    "hymem",
+    "agent-memory",
+    "sqlite",
+    "better-sqlite3"
+  ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/codewithveek/hymem.git",
+    "directory": "packages/sqlite"
+  },
+  "homepage": "https://github.com/codewithveek/hymem#readme",
+  "bugs": {
+    "url": "https://github.com/codewithveek/hymem/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.17"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.map",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "hymem": "0.1.0"
+  }
+}

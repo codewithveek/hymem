@@ -16,8 +16,18 @@ services:
       - "7687:7687"   # Bolt
       - "8443:8443"   # HTTP query API
       - "9090:9090"   # Admin
+    # The entrypoint writes the auth-token into the /data volume, which is
+    # root-owned; without this the container exits with "cannot create
+    # /data/auth-token: Permission denied".
+    user: root
     environment:
-      CLOUD_PROVIDER: local
+      # `local` persists to /data/store but currently fails every WRITE with
+      #   object store error: Operation `put_opts` with mode `PutMode::Update`
+      #   not yet implemented by LocalFileSystem(file:///data/store)
+      # because SlateDB's LocalFileSystem backend has no conditional put.
+      # Reads work; writes do not. Use `memory` (non-persistent) for tests and
+      # demos, or point at S3/MinIO for a durable store that supports CAS.
+      CLOUD_PROVIDER: ${HYDRADB_STORE:-memory}
       LOCAL_PATH: /data/store
       GRAPH_NAMESPACE: default
       GRAPH_ID: default

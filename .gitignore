@@ -2,3 +2,5 @@ node_modules/
 dist/
 .env
 eval-results.log
+*.tsbuildinfo
+hymem.db

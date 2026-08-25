@@ -1,0 +1,70 @@
+{
+  "name": "@hymem/cli",
+  "version": "0.1.0",
+  "description": "CLI and MCP server for hymem",
+  "keywords": [
+    "hymem",
+    "agent-memory",
+    "cli",
+    "mcp"
+  ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/codewithveek/hymem.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/codewithveek/hymem#readme",
+  "bugs": {
+    "url": "https://github.com/codewithveek/hymem/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.17"
+  },
+  "bin": {
+    "hymem": "dist/cli.js",
+    "hymem-mcp": "dist/mcp-server.js"
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.map",
+    "README.md",
+    "LICENSE",
+    ".env.example"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "cli": "tsx --no-warnings src/cli.ts",
+    "schema": "tsx --no-warnings src/cli.ts schema",
+    "mcp": "tsx --no-warnings src/mcp-server.ts",
+    "bootstrap": "tsx --no-warnings src/bootstrap.ts",
+    "eval": "tsx --no-warnings src/eval.ts",
+    "conformance": "tsx --no-warnings src/run-conformance.ts",
+    "sql-checks": "tsx --no-warnings src/run-sql-checks.ts",
+    "tenancy-checks": "tsx --no-warnings src/run-tenancy-checks.ts"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.40",
+    "@ai-sdk/google": "^4.0.0",
+    "@ai-sdk/openai": "^4.0.44",
+    "@ai-sdk/openai-compatible": "^3.0.32",
+    "@hymem/bolt": "0.1.0",
+    "@hymem/postgres": "0.1.0",
+    "@hymem/sqlite": "0.1.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "ai": "^7.0.70",
+    "commander": "^15.0.0",
+    "hymem": "0.1.0",
+    "neo4j-driver": "~5.27.0",
+    "zod": "^3.25.0"
+  },
+  "optionalDependencies": {
+    "pg": "^8"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.23.1"
+  }
+}

@@ -1,66 +1,34 @@
 {
-  "name": "hymem",
-  "version": "0.1.0",
-  "description": "Temporal knowledge-graph agent memory on the HydraDB OSS engine — CLI, library, and MCP server",
+  "name": "hymem-workspace",
+  "private": true,
   "type": "module",
-  "license": "Apache-2.0",
-  "keywords": [
-    "agent-memory",
-    "hydradb",
-    "knowledge-graph",
-    "mcp",
-    "temporal",
-    "longmemeval",
-    "ai"
+  "workspaces": [
+    "packages/*"
   ],
   "engines": {
     "node": ">=22.17"
   },
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    }
-  },
-  "bin": {
-    "hymem": "./dist/cli.js",
-    "hymem-mcp": "./dist/mcp-server.js"
-  },
-  "files": [
-    "dist",
-    "README.md",
-    "LICENSE",
-    "scripts/run-hydra.sh",
-    ".env.example"
-  ],
   "scripts": {
-    "build": "tsc",
-    "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run typecheck && npm run build",
-    "bootstrap": "tsx src/bootstrap.ts",
-    "cli": "tsx src/cli.ts",
-    "ingest": "tsx src/cli.ts ingest",
-    "ask": "tsx src/cli.ts ask",
-    "inspect": "tsx src/cli.ts inspect",
-    "eval": "tsx src/eval.ts",
-    "mcp": "tsx src/mcp-server.ts"
-  },
-  "dependencies": {
-    "@ai-sdk/anthropic": "^4.0.40",
-    "@ai-sdk/google": "^4.0.0",
-    "@ai-sdk/openai": "^4.0.44",
-    "@ai-sdk/openai-compatible": "^3.0.32",
-    "@modelcontextprotocol/sdk": "^1.30.0",
-    "ai": "^7.0.70",
-    "commander": "^15.0.0",
-    "neo4j-driver": "~5.27.0",
-    "zod": "^3.25.0"
+    "build": "tsc --build",
+    "clean": "tsc --build --clean",
+    "typecheck": "tsc --build --dry",
+    "conformance": "npm run -w @hymem/cli conformance --",
+    "sql-checks": "npm run -w @hymem/cli sql-checks",
+    "tenancy-checks": "npm run -w @hymem/cli tenancy-checks",
+    "cli": "npm run -w @hymem/cli cli --",
+    "schema": "npm run -w @hymem/cli schema --",
+    "mcp": "npm run -w @hymem/cli mcp",
+    "check": "npm run build && npm run conformance memory && npm run conformance sqlite && npm run sql-checks && npm run tenancy-checks",
+    "publish:dry": "npm publish --workspaces --dry-run",
+    "publish:all": "npm publish --workspaces --access public"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "tsx": "^4.0.0",
     "typescript": "^5.9.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/codewithveek/hymem.git"
   }
 }
