@@ -32,9 +32,9 @@ export interface SessionInput {
 /** A distilled triple-shaped fact, as produced by an Extractor. */
 export interface Fact {
   /**
-   * Deterministic hash(namespace|subject|attribute|value) — re-stating a fact
-   * reuses this id. Assigned by core, not by the extractor: the speaker rewrite
-   * happens first, so only core knows the final subject.
+   * Deterministic hash of (namespace, subject, attribute, value) — re-stating a
+   * fact reuses this id. Assigned by core, not by the extractor: the speaker
+   * rewrite happens first, so only core knows the final subject.
    */
   id: string;
   /** Tenant boundary. The same triple in two namespaces is two separate facts. */
@@ -81,7 +81,7 @@ export interface SearchQuery {
   entities: string[];
   /** If non-empty, additionally require the attribute to be ANY of these. */
   attributes?: string[];
-  /** Return at most this many facts. */
+  /** Return at most this many facts. An upper bound: zero returns nothing. */
   limit: number;
 }
 

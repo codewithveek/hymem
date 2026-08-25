@@ -43,6 +43,7 @@
     "bootstrap": "tsx --no-warnings src/bootstrap.ts",
     "eval": "tsx --no-warnings src/eval.ts",
     "conformance": "tsx --no-warnings src/run-conformance.ts",
+    "core-checks": "tsx --no-warnings src/run-core-checks.ts",
     "sql-checks": "tsx --no-warnings src/run-sql-checks.ts",
     "tenancy-checks": "tsx --no-warnings src/run-tenancy-checks.ts"
   },

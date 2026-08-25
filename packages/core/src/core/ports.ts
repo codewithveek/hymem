@@ -42,7 +42,8 @@ export interface StoreCapabilities {
  *    Ingesting the same history twice must be a no-op.
  *  - Ordering is always by `observedAt` ASCENDING in returned arrays.
  *  - `search` returns the MOST RECENT `limit` matches, but ordered ascending.
- *    (Take the newest N, then sort ascending — not the first N.)
+ *    (Take the newest N, then sort ascending — not the first N.) `limit` is
+ *    an upper bound and nothing more, so a limit of zero returns nothing.
  *  - String ids are the domain's identity. An engine needing another id shape
  *    (HydraDB wants non-negative integers) maps internally and keeps the
  *    string retrievable.
@@ -58,7 +59,14 @@ export interface MemoryStore {
   /** Upsert facts as active (see re-activation note above). */
   putFacts(facts: StoredFact[]): Promise<void>;
 
-  /** Idempotently associate facts with canonical entity names. */
+  /**
+   * Idempotently associate facts with canonical entity names.
+   *
+   * A `factId` this namespace does not own is IGNORED, exactly as `deleteFacts`
+   * ignores one. The link table is what `search` anchors on, so accepting a
+   * foreign id would let one tenant change what another tenant's own queries
+   * return — a write outside the namespace, by a different door.
+   */
   linkEntities(namespace: string, links: { factId: string; entity: string }[]): Promise<void>;
 
   /**

@@ -417,6 +417,62 @@ const TESTS: Test[] = [
       await store.clear(OTHER_NS);
     },
   },
+  {
+    name: "putFacts writes a batch spanning namespaces, sessions included",
+    run: async (store) => {
+      const mine = fact("user", "home_city", "lisbon", AT.session1, "s1");
+      const theirs = fact("user", "home_city", "berlin", AT.session2, "s2", ["user"], OTHER_NS);
+      // Deliberately no putSession: the port lets a caller write facts for a
+      // session the store has not seen, and each fact names its own namespace.
+      // A store that reads the namespace off the first fact and applies it to
+      // the whole batch loses the second one's provenance.
+      await store.putFacts([asActive(mine), asActive(theirs)]);
+      eq(
+        (await store.listFacts(NS)).map((storedFact) => storedFact.value),
+        ["lisbon"],
+        "the first namespace's fact did not survive a mixed batch",
+      );
+      eq(
+        (await store.listFacts(OTHER_NS)).map((storedFact) => storedFact.value),
+        ["berlin"],
+        "the second namespace's fact did not survive a mixed batch",
+      );
+      await store.clear(OTHER_NS);
+    },
+  },
+  {
+    name: "search treats limit as an upper bound, zero included",
+    run: async (store) => {
+      await state(store, fact("user", "home_city", "lisbon", AT.session1, "s1"));
+      eq(
+        (await store.search({ namespace: NS, entities: ["user"], limit: 0 })).length,
+        0,
+        "limit 0 asks for no facts and must return none",
+      );
+    },
+  },
+  {
+    name: "TENANCY: linkEntities cannot index another namespace's fact",
+    run: async (store) => {
+      const theirs = fact("user", "home_city", "berlin", AT.session1, "s1", ["user"], OTHER_NS);
+      await state(store, theirs);
+      // The right id, the wrong namespace. Two things must hold: this namespace
+      // cannot pull the fact into its own index, and the owning namespace's
+      // index is not a stranger's to write either.
+      await store.linkEntities(NS, [{ factId: theirs.id, entity: "smuggled" }]);
+      eq(
+        await store.search({ namespace: NS, entities: ["smuggled"], limit: 10 }),
+        [],
+        "a foreign fact id was indexed into another namespace",
+      );
+      eq(
+        (await store.search({ namespace: OTHER_NS, entities: ["smuggled"], limit: 10 })).length,
+        0,
+        "one namespace changed what another namespace's search returns",
+      );
+      await store.clear(OTHER_NS);
+    },
+  },
 ];
 
 /**

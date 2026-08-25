@@ -14,6 +14,7 @@
  * sees `fact.id` as the 24-char hash it always was.
  */
 import { createHash } from "node:crypto";
+import { scopedKey } from "../../core/ids.js";
 import type { MemoryStore, StoreCapabilities } from "../../core/ports.js";
 import type { SearchQuery, SessionRecord, StoredFact } from "../../core/types.js";
 import type { CypherDriver } from "./driver.js";
@@ -173,6 +174,8 @@ export function cypherStore(options: CypherStoreOptions): MemoryStore {
   const byObservedAtAscending = (earlier: StoredFact, later: StoredFact) =>
     earlier.observedAt.localeCompare(later.observedAt);
 
+  let closing: Promise<void> | undefined;
+
   return {
     capabilities,
 
@@ -235,11 +238,19 @@ export function cypherStore(options: CypherStoreOptions): MemoryStore {
       }
       // Provenance edge. Sessions are upserted by putSession, but a caller may
       // write facts for a session the store has not seen, so ensure the node.
-      const namespace = incomingFacts[0].namespace;
-      const sessionIds = [...new Set(incomingFacts.map((incomingFact) => incomingFact.sessionId))];
+      // A session node is identified by (namespace, sessionId), and the port
+      // puts no same-namespace restriction on a batch — so dedupe on the pair,
+      // not on the session id. Keying every session off the first fact's
+      // namespace would leave later facts pointing at nodes nobody created,
+      // and an engine that requires both endpoints would reject the edge.
+      const sessionsByGraphKey = new Map<string, { namespace: string; sessionId: string }>();
+      for (const incomingFact of incomingFacts) {
+        const { namespace, sessionId } = incomingFact;
+        sessionsByGraphKey.set(scopedKey(namespace, sessionId), { namespace, sessionId });
+      }
       await upsertNodes(
         "Session",
-        sessionIds.map((sessionId) => ({
+        [...sessionsByGraphKey.values()].map(({ namespace, sessionId }) => ({
           id: sessionGraphId(namespace, sessionId),
           properties: { key: sessionId, namespace },
         })),
@@ -257,7 +268,23 @@ export function cypherStore(options: CypherStoreOptions): MemoryStore {
 
     async linkEntities(namespace: string, links) {
       if (links.length === 0) return;
-      const entityNames = [...new Set(links.map((link) => link.entity))];
+      // mergeEdges matches its source by id alone, so an unchecked fact id
+      // would let this namespace hang an ABOUT edge off another tenant's fact —
+      // a write outside the namespace, which the port forbids outright. One
+      // MATCH per distinct id, the same shape deleteFacts uses, because the
+      // restrictive dialects offer no way to check a list of ids at once.
+      const ownedFactIds = new Set<string>();
+      for (const factId of new Set(links.map((link) => link.factId))) {
+        const owned = await driver.run<{ key: string }>(
+          `MATCH (f:Fact {id: $id}) WHERE f.namespace = $namespace RETURN f.key AS key`,
+          { id: factGraphId(factId), namespace },
+        );
+        if (owned.length > 0) ownedFactIds.add(factId);
+      }
+      const ownedLinks = links.filter((link) => ownedFactIds.has(link.factId));
+      if (ownedLinks.length === 0) return;
+
+      const entityNames = [...new Set(ownedLinks.map((link) => link.entity))];
       await upsertNodes(
         "Entity",
         entityNames.map((entityName) => ({
@@ -269,7 +296,7 @@ export function cypherStore(options: CypherStoreOptions): MemoryStore {
         "Fact",
         "ABOUT",
         "Entity",
-        links.map((link) => ({
+        ownedLinks.map((link) => ({
           source: factGraphId(link.factId),
           destination: entityGraphId(namespace, link.entity),
         })),
@@ -328,6 +355,10 @@ export function cypherStore(options: CypherStoreOptions): MemoryStore {
     },
 
     async search(query: SearchQuery) {
+      const limit = Math.floor(query.limit);
+      // `limit` is an upper bound, so zero means zero — and asking an engine
+      // for LIMIT 0 is a round trip whose rows are thrown away regardless.
+      if (query.entities.length === 0 || !Number.isFinite(limit) || limit <= 0) return [];
       const attributes = query.attributes ?? [];
       // No IN on HydraDB, so an attribute filter is an OR chain of equalities.
       // A WHERE clause is always present now (the namespace check), so the
@@ -355,7 +386,7 @@ export function cypherStore(options: CypherStoreOptions): MemoryStore {
            WHERE f.namespace = $namespace ${attributeFilter}
            RETURN ${FACT_RETURN}
            ORDER BY observed_at DESC
-           LIMIT ${Math.max(1, Math.floor(query.limit))}`,
+           LIMIT ${limit}`,
           { eid: entityGraphId(query.namespace, entityName), namespace: query.namespace, ...attributeParams },
         );
         for (const row of rows) {
@@ -365,7 +396,7 @@ export function cypherStore(options: CypherStoreOptions): MemoryStore {
         }
       }
       matches.sort(byObservedAtAscending);
-      return matches.slice(Math.max(0, matches.length - query.limit));
+      return matches.slice(Math.max(0, matches.length - limit));
     },
 
     async getSupersededBy(namespace: string, factId: string) {
@@ -419,7 +450,14 @@ export function cypherStore(options: CypherStoreOptions): MemoryStore {
     },
 
     async close() {
-      await driver.close();
+      // The port promises a second close is safe; a driver's session or pool
+      // usually does not. Memoise the first call, and drop the memo if it fails
+      // so a close that errored can be retried rather than remembered as done.
+      closing ??= driver.close().catch((error: unknown) => {
+        closing = undefined;
+        throw error;
+      });
+      await closing;
     },
   };
 }
