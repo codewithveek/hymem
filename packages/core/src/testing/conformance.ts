@@ -6,7 +6,7 @@
  * access to anything but the store under test, so adapter authors need no API
  * keys to verify their work.
  *
- *   import { runStoreConformance } from "hymem/testing";
+ *   import { runStoreConformance } from "@hymem/core/testing";
  *   await runStoreConformance(() => postgres({ pool }));
  */
 import type { MemoryStore } from "../core/ports.js";

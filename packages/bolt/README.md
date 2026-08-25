@@ -3,11 +3,11 @@
 Graph storage adapter for [hymem](https://github.com/hydra-db/hymem) over the Bolt protocol — HydraDB, Neo4j, and Memgraph.
 
 ```bash
-npm install hymem @hymem/bolt neo4j-driver
+npm install @hymem/core @hymem/bolt neo4j-driver
 ```
 
 ```ts
-import { createMemory } from "hymem";
+import { createMemory } from "@hymem/core";
 import { hydradb } from "@hymem/bolt";
 
 const memory = createMemory({

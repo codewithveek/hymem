@@ -1,7 +1,7 @@
 /**
  * @hymem/sqlite — SQLite storage for hymem.
  *
- *   import { createMemory } from "hymem";
+ *   import { createMemory } from "@hymem/core";
  *   import { sqlite } from "@hymem/sqlite";
  *   import { DatabaseSync } from "node:sqlite";
  *
@@ -14,8 +14,8 @@
  * No peer dependency at all: `node:sqlite` is built into Node 22.5+.
  * better-sqlite3 works too — it wears the same prepare/all/run shape.
  */
-import { sqlStore, SQLITE } from "hymem/stores/sql";
-import type { MemoryStore, SqlDriver, MigrateMode } from "hymem/stores/sql";
+import { sqlStore, SQLITE } from "@hymem/core/stores/sql";
+import type { MemoryStore, SqlDriver, MigrateMode } from "@hymem/core/stores/sql";
 
 /**
  * Minimal shape of a synchronous SQLite handle (node:sqlite, better-sqlite3).
@@ -102,5 +102,5 @@ export function sqlite(options: SqliteOptions): MemoryStore {
   });
 }
 
-export { SQLITE } from "hymem/stores/sql";
-export type { SqlDriver, MigrateMode } from "hymem/stores/sql";
+export { SQLITE } from "@hymem/core/stores/sql";
+export type { SqlDriver, MigrateMode } from "@hymem/core/stores/sql";

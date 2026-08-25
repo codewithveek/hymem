@@ -1,6 +1,6 @@
 {
   "name": "@hymem/cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "CLI and MCP server for hymem",
   "keywords": [
     "hymem",
@@ -51,13 +51,13 @@
     "@ai-sdk/google": "^4.0.0",
     "@ai-sdk/openai": "^4.0.44",
     "@ai-sdk/openai-compatible": "^3.0.32",
-    "@hymem/bolt": "0.1.0",
-    "@hymem/postgres": "0.1.0",
-    "@hymem/sqlite": "0.1.0",
+    "@hymem/bolt": "0.1.1",
+    "@hymem/core": "0.1.1",
+    "@hymem/postgres": "0.1.1",
+    "@hymem/sqlite": "0.1.1",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "ai": "^7.0.70",
     "commander": "^15.0.0",
-    "hymem": "0.1.0",
     "neo4j-driver": "~5.27.0",
     "zod": "^3.25.0"
   },

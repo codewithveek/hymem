@@ -1,6 +1,6 @@
 {
   "name": "@hymem/bolt",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Graph storage adapter for hymem over Bolt \u2014 HydraDB, Neo4j, Memgraph",
   "keywords": [
     "hymem",
@@ -43,7 +43,7 @@
     "access": "public"
   },
   "dependencies": {
-    "hymem": "0.1.0"
+    "@hymem/core": "0.1.1"
   },
   "peerDependencies": {
     "neo4j-driver": "~5.27.0"

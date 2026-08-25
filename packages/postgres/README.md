@@ -3,11 +3,11 @@
 Postgres storage adapter for [hymem](https://github.com/hydra-db/hymem).
 
 ```bash
-npm install hymem @hymem/postgres pg
+npm install @hymem/core @hymem/postgres pg
 ```
 
 ```ts
-import { createMemory } from "hymem";
+import { createMemory } from "@hymem/core";
 import { postgres } from "@hymem/postgres";
 import { openai } from "@ai-sdk/openai";
 import { Pool } from "pg";

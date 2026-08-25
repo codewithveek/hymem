@@ -1,8 +1,8 @@
 /**
  * hymem — temporal knowledge-graph agent memory, store-agnostic.
  *
- *   import { createMemory } from "hymem";
- *   import { hydradb } from "hymem/stores/cypher";
+ *   import { createMemory } from "@hymem/core";
+ *   import { hydradb } from "@hymem/core/stores/cypher";
  *   import { openai } from "@ai-sdk/openai";
  *
  *   const memory = createMemory({

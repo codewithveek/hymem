@@ -20,14 +20,14 @@ The memory model — extraction, fact identity, supersession, bitemporal validit
 
 | Store | Package | Peer dependency |
 | --- | --- | --- |
-| In-memory | `hymem` → `memoryStore()` | none |
+| In-memory | `@hymem/core` → `memoryStore()` | none |
 | SQLite | `@hymem/sqlite` → `sqlite()` | none (`node:sqlite` is built in) |
 | Postgres | `@hymem/postgres` → `postgres()` | `pg` |
 | HydraDB | `@hymem/bolt` → `hydradb()` | `neo4j-driver` |
 | Neo4j | `@hymem/bolt` → `neo4jStore()` | `neo4j-driver` |
 | Memgraph | `@hymem/bolt` → `memgraph()` | `neo4j-driver` |
 
-**`hymem` itself depends on `zod` and nothing else**, with `ai` as an optional
+**`@hymem/core` itself depends on `zod` and nothing else**, with `ai` as an optional
 peer. Both store implementations are pure logic — the dependencies live entirely
 in the *drivers*, which is where the package boundary falls. Install the core
 plus the one adapter you use, and you never pull in a database client you will
@@ -226,7 +226,7 @@ Four ports, all replaceable: `MemoryStore` (where facts live), `Extractor` (tran
 ## Repo layout
 
 ```
-packages/core/     hymem            core, ports, algorithms, in-memory store,
+packages/core/     @hymem/core      core, ports, algorithms, in-memory store,
                                     the pure SQL and Cypher stores, conformance
 packages/postgres/ @hymem/postgres  pg driver + postgres()
 packages/sqlite/   @hymem/sqlite    node:sqlite driver + sqlite()
@@ -287,7 +287,7 @@ Structured extraction uses `generateObject` with zod schemas, so fact JSON is va
 Everything is injected — no globals, no environment reads, no bundled LLM provider. Two memories with different stores can coexist in one process.
 
 ```ts
-import { createMemory } from "hymem";
+import { createMemory } from "@hymem/core";
 import { hydradb } from "@hymem/bolt";
 import { openai } from "@ai-sdk/openai";
 
@@ -319,7 +319,7 @@ const memory = createMemory({
 ### Writing a store adapter
 
 ```ts
-import { runStoreConformance } from "hymem/testing";
+import { runStoreConformance } from "@hymem/core/testing";
 
 const result = await runStoreConformance(() => myStore());
 console.log(`${result.passed} passed, ${result.failed.length} failed`);

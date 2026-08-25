@@ -1,7 +1,7 @@
 /**
  * @hymem/bolt — graph storage for hymem over the Bolt protocol.
  *
- *   import { createMemory } from "hymem";
+ *   import { createMemory } from "@hymem/core";
  *   import { hydradb } from "@hymem/bolt";
  *
  *   const memory = createMemory({
@@ -16,8 +16,8 @@
  * genuinely different installs; here there is nothing to separate.
  */
 import neo4j, { type Driver } from "neo4j-driver";
-import { cypherStore, HYDRADB, MEMGRAPH, NEO4J } from "hymem/stores/cypher";
-import type { CypherDriver, Dialect, MemoryStore } from "hymem/stores/cypher";
+import { cypherStore, HYDRADB, MEMGRAPH, NEO4J } from "@hymem/core/stores/cypher";
+import type { CypherDriver, Dialect, MemoryStore } from "@hymem/core/stores/cypher";
 
 export interface BoltOptions {
   url: string;
@@ -185,5 +185,5 @@ export const neo4jStore = (options: BoltConnectOptions = {}): MemoryStore =>
 export const memgraph = (options: BoltConnectOptions = {}): MemoryStore =>
   connect({ transactions: true, ...options }, MEMGRAPH, "bolt://127.0.0.1:7687");
 
-export { HYDRADB, NEO4J, MEMGRAPH } from "hymem/stores/cypher";
-export type { CypherDriver, Dialect } from "hymem/stores/cypher";
+export { HYDRADB, NEO4J, MEMGRAPH } from "@hymem/core/stores/cypher";
+export type { CypherDriver, Dialect } from "@hymem/core/stores/cypher";

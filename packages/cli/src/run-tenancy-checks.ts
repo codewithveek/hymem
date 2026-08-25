@@ -13,7 +13,7 @@ import {
   type Extractor,
   type QueryPlanner,
   type SessionInput,
-} from "hymem";
+} from "@hymem/core";
 
 let failures = 0;
 function check(name: string, condition: boolean, detail = "") {

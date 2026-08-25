@@ -1,7 +1,7 @@
 /**
  * @hymem/postgres — Postgres storage for hymem.
  *
- *   import { createMemory } from "hymem";
+ *   import { createMemory } from "@hymem/core";
  *   import { postgres } from "@hymem/postgres";
  *
  *   const memory = createMemory({
@@ -10,12 +10,12 @@
  *     namespace: `usr_${userId}`,
  *   });
  *
- * The store itself lives in `hymem` and has no dependencies — only this driver
+ * The store itself lives in `@hymem/core` and has no dependencies — only this driver
  * needs `pg`, which is why it is a separate package rather than an optional
  * peer dependency everyone would see warnings about.
  */
-import { sqlStore, POSTGRES } from "hymem/stores/sql";
-import type { MemoryStore, SqlDriver, MigrateMode } from "hymem/stores/sql";
+import { sqlStore, POSTGRES } from "@hymem/core/stores/sql";
+import type { MemoryStore, SqlDriver, MigrateMode } from "@hymem/core/stores/sql";
 
 /** Minimal shape of a `pg` Pool or Client — structural, so `pg` stays a peer dependency. */
 export interface PgLike {
@@ -101,5 +101,5 @@ export function postgres(options: PostgresOptions): MemoryStore {
   });
 }
 
-export { POSTGRES } from "hymem/stores/sql";
-export type { SqlDriver, MigrateMode } from "hymem/stores/sql";
+export { POSTGRES } from "@hymem/core/stores/sql";
+export type { SqlDriver, MigrateMode } from "@hymem/core/stores/sql";

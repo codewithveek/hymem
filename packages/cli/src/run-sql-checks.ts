@@ -12,7 +12,7 @@ import {
   UnsafeTablePrefixError,
   POSTGRES,
   SQLITE,
-} from "hymem/stores/sql";
+} from "@hymem/core/stores/sql";
 
 const NS = "tenant_a";
 

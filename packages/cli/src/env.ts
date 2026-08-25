@@ -11,7 +11,7 @@ import { createAnthropic } from "@ai-sdk/anthropic";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import type { LanguageModel } from "ai";
-import { createMemory, memoryStore, type Memory, type MemoryStore } from "hymem";
+import { createMemory, memoryStore, type Memory, type MemoryStore } from "@hymem/core";
 import { hydradb, memgraph, neo4jStore } from "@hymem/bolt";
 
 try {

@@ -6,11 +6,11 @@ No peer dependency: `node:sqlite` ships with Node 22.5+. better-sqlite3 works
 too — it wears the same `prepare`/`all`/`run` shape.
 
 ```bash
-npm install hymem @hymem/sqlite
+npm install @hymem/core @hymem/sqlite
 ```
 
 ```ts
-import { createMemory } from "hymem";
+import { createMemory } from "@hymem/core";
 import { sqlite } from "@hymem/sqlite";
 import { DatabaseSync } from "node:sqlite";
 

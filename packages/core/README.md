@@ -20,7 +20,7 @@ The memory model — extraction, fact identity, supersession, bitemporal validit
 
 | Store | Import | Needs |
 | --- | --- | --- |
-| In-memory | `hymem` → `memoryStore()` | nothing |
+| In-memory | `@hymem/core` → `memoryStore()` | nothing |
 | SQLite | `hymem/stores/sql` → `sqlite()` | `node:sqlite` (built in) or better-sqlite3 |
 | Postgres | `hymem/stores/sql` → `postgres()` | `pg` |
 | HydraDB | `hymem/stores/cypher` → `hydradb()` | a graph-node over Bolt |
@@ -268,8 +268,8 @@ Structured extraction uses `generateObject` with zod schemas, so fact JSON is va
 Everything is injected — no globals, no environment reads, no bundled LLM provider. Two memories with different stores can coexist in one process.
 
 ```ts
-import { createMemory } from "hymem";
-import { hydradb } from "hymem/stores/cypher";
+import { createMemory } from "@hymem/core";
+import { hydradb } from "@hymem/core/stores/cypher";
 import { openai } from "@ai-sdk/openai";
 
 const memory = createMemory({
@@ -300,7 +300,7 @@ const memory = createMemory({
 ### Writing a store adapter
 
 ```ts
-import { runStoreConformance } from "hymem/testing";
+import { runStoreConformance } from "@hymem/core/testing";
 
 const result = await runStoreConformance(() => myStore());
 console.log(`${result.passed} passed, ${result.failed.length} failed`);

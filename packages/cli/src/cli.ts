@@ -2,9 +2,9 @@
 import { readFileSync } from "node:fs";
 import { Command } from "commander";
 import { memoryFromEnv, namespaceFromEnv, storeFromEnv } from "./env.js";
-import { runStoreConformance, CONFORMANCE_TEST_COUNT } from "hymem/testing";
-import type { SessionInput } from "hymem";
-import type { Memory } from "hymem";
+import { runStoreConformance, CONFORMANCE_TEST_COUNT } from "@hymem/core/testing";
+import type { SessionInput } from "@hymem/core";
+import type { Memory } from "@hymem/core";
 
 /**
  * Built on first use, not at startup: `schema` and `conformance` need neither a
@@ -119,7 +119,7 @@ program
   .option("--dialect <name>", "postgres | sqlite", "postgres")
   .option("--prefix <prefix>", "table-name prefix", "hymem_")
   .action(async (options: { dialect: string; prefix: string }) => {
-    const { schemaScript, POSTGRES, SQLITE } = await import("hymem/stores/sql");
+    const { schemaScript, POSTGRES, SQLITE } = await import("@hymem/core/stores/sql");
     const dialects = { postgres: POSTGRES, sqlite: SQLITE };
     const dialect = dialects[options.dialect as keyof typeof dialects];
     if (!dialect) {

@@ -3,8 +3,8 @@
  * `npm run conformance [store]` — verify a store adapter against the suite.
  * Defaults to the in-memory reference store, which needs no services running.
  */
-import { runStoreConformance, CONFORMANCE_TEST_COUNT } from "hymem/testing";
-import { memoryStore, type MemoryStore } from "hymem";
+import { runStoreConformance, CONFORMANCE_TEST_COUNT } from "@hymem/core/testing";
+import { memoryStore, type MemoryStore } from "@hymem/core";
 import { hydradb, neo4jStore } from "@hymem/bolt";
 import { postgres } from "@hymem/postgres";
 import { sqlite } from "@hymem/sqlite";
