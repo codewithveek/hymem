@@ -1,6 +1,6 @@
 # @hymem/sqlite
 
-SQLite storage adapter for [hymem](https://github.com/hydra-db/hymem).
+SQLite storage adapter for [hymem](https://github.com/codewithveek/hymem).
 
 No peer dependency: `node:sqlite` ships with Node 22.5+. better-sqlite3 works
 too — it wears the same `prepare`/`all`/`run` shape.

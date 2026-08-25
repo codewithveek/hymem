@@ -1,6 +1,6 @@
 # @hymem/cli
 
-CLI and MCP server for [hymem](https://github.com/hydra-db/hymem).
+CLI and MCP server for [hymem](https://github.com/codewithveek/hymem).
 
 ```bash
 npm install -g @hymem/cli

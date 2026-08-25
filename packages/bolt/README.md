@@ -1,6 +1,6 @@
 # @hymem/bolt
 
-Graph storage adapter for [hymem](https://github.com/hydra-db/hymem) over the Bolt protocol — HydraDB, Neo4j, and Memgraph.
+Graph storage adapter for [hymem](https://github.com/codewithveek/hymem) over the Bolt protocol — HydraDB, Neo4j, and Memgraph.
 
 ```bash
 npm install @hymem/core @hymem/bolt neo4j-driver

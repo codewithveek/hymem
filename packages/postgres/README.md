@@ -1,6 +1,6 @@
 # @hymem/postgres
 
-Postgres storage adapter for [hymem](https://github.com/hydra-db/hymem).
+Postgres storage adapter for [hymem](https://github.com/codewithveek/hymem).
 
 ```bash
 npm install @hymem/core @hymem/postgres pg

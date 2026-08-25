@@ -16,16 +16,26 @@ It ships in two usable forms: a CLI/eval pipeline for LongMemEval, and an **MCP 
 
 ## Storage adapters
 
-The memory model — extraction, fact identity, supersession, bitemporal validity, entity-anchored recall, structural abstention — lives in `src/core/` and knows nothing about any engine. Persistence is a port, `MemoryStore` ([`src/core/ports.ts`](src/core/ports.ts)): ten methods that speak *facts*, not nodes or rows.
+The memory model — extraction, fact identity, supersession, bitemporal validity, entity-anchored recall, structural abstention — lives in `src/core/` and knows nothing about any engine. Persistence is a port, `MemoryStore` ([`packages/core/src/core/ports.ts`](packages/core/src/core/ports.ts)): ten methods that speak *facts*, not nodes or rows.
 
-| Store | Import | Needs |
+| Store | Package | Peer dependency |
 | --- | --- | --- |
-| In-memory | `@hymem/core` → `memoryStore()` | nothing |
-| SQLite | `hymem/stores/sql` → `sqlite()` | `node:sqlite` (built in) or better-sqlite3 |
-| Postgres | `hymem/stores/sql` → `postgres()` | `pg` |
-| HydraDB | `hymem/stores/cypher` → `hydradb()` | a graph-node over Bolt |
-| Neo4j | `hymem/stores/cypher` → `neo4j()` | Neo4j 5.x |
-| Memgraph | `hymem/stores/cypher` → `memgraph()` | Memgraph |
+| In-memory | `@hymem/core` → `memoryStore()` | none |
+| SQLite | `@hymem/sqlite` → `sqlite()` | none (`node:sqlite` is built in) |
+| Postgres | `@hymem/postgres` → `postgres()` | `pg` |
+| HydraDB | `@hymem/bolt` → `hydradb()` | `neo4j-driver` |
+| Neo4j | `@hymem/bolt` → `neo4jStore()` | `neo4j-driver` |
+| Memgraph | `@hymem/bolt` → `memgraph()` | `neo4j-driver` |
+
+**`@hymem/core` itself depends on `zod` and nothing else**, with `ai` as an optional
+peer. Both store implementations are pure logic — the dependencies live entirely
+in the *drivers*, which is where the package boundary falls. Install the core
+plus the one adapter you use, and you never pull in a database client you will
+not call.
+
+Packages are split where dependencies genuinely differ. `pg` and better-sqlite3
+are different installs, so those are separate packages; HydraDB, Neo4j and
+Memgraph all speak Bolt and share one peer dependency, so they are one.
 
 Every adapter is checked against the same executable contract:
 
@@ -33,10 +43,11 @@ Every adapter is checked against the same executable contract:
 npm run conformance            # in-memory reference store
 npm run conformance sqlite     # real SQL, no install (node:sqlite)
 npm run conformance postgres   # a live Postgres
+npm run conformance neo4j      # a live Neo4j
 npm run conformance hydradb    # a live HydraDB node
 ```
 
-All four pass the identical suite. That the same ten methods land naturally on a property graph *and* on four SQL tables is the evidence the port sits at the right altitude.
+All five pass the identical suite. That the same ten methods land naturally on a property graph *and* on four SQL tables is the evidence the port sits at the right altitude.
 
 ## Tenancy
 
@@ -136,8 +147,9 @@ Writing your own adapter is implementing the ten methods and making `runStoreCon
 | --- | --- | --- |
 | Postgres | one data-modifying CTE (`WITH closed AS (UPDATE ... RETURNING) INSERT ...`) | yes |
 | SQLite | explicit transaction, serialised (one connection) | yes |
+| Neo4j / Memgraph | one managed write transaction (`executeWrite`) | yes |
 | In-memory | no `await` in the method body | yes |
-| HydraDB / Neo4j | separate round trips, no transaction exposed | **no** |
+| HydraDB | separate round trips — no transaction in its Cypher subset | **no** |
 
 Stores that cannot make the guarantee say so, and the conformance suite skips the concurrency test for them rather than letting it pass by accident. A `pg.Pool` is required for the Postgres guarantee — issuing `BEGIN` through a pool is a bug, since each statement may land on a different connection, so the driver pins one via `connect()`.
 
@@ -145,28 +157,76 @@ Stores that cannot make the guarantee say so, and the conformance suite skips th
 
 Ingestion writes batched `UNWIND` Cypher over Bolt (node upserts, then edge merges between matched nodes); the supersession pass closes the old fact with `MATCH ... SET` and chains it with a batched `MERGE (new)-[:SUPERSEDES]->(old)`; recall is an entity-anchored traversal (`(:Fact)-[:ABOUT]->(:Entity {id})`). Reads are snapshot-consistent, and storage is object-store-native, so the memory survives process restarts and scales past RAM.
 
-HydraDB executes a deliberate **subset** of OpenCypher (see `cypher-compat.md` in the HydraDB repo), and every statement is written inside it. The rules that matter — integer node ids sent as Bolt INTs, node creation only via `UNWIND ... MERGE ... SET`, no `MATCH ... MERGE`, no `IN`/`coalesce()`, no label-less `MATCH (n)` — are captured as a `Dialect` in [`src/stores/cypher/dialect.ts`](src/stores/cypher/dialect.ts), which is also what lets Neo4j and Memgraph share one implementation. The integer-id mapping is private to the adapter: the rest of hymem only ever sees a fact's string hash. `neo4j-driver` is pinned to `~5.27`: from 5.28 the JS driver uses the Bolt manifest handshake, which HydraDB's server answers in several TCP writes and the driver reads as one — a coin-flip connection failure that [`src/stores/cypher/driver.ts`](src/stores/cypher/driver.ts) also retries around as a backstop.
+HydraDB executes a deliberate **subset** of OpenCypher (see `cypher-compat.md` in the HydraDB repo), and every statement is written inside it. The rules that matter — integer node ids sent as Bolt INTs, node creation only via `UNWIND ... MERGE ... SET`, no `MATCH ... MERGE`, no `IN`/`coalesce()`, no label-less `MATCH (n)` — are captured as a `Dialect` in [`packages/core/src/stores/cypher/dialect.ts`](packages/core/src/stores/cypher/dialect.ts), which is also what lets Neo4j and Memgraph share one implementation. The integer-id mapping is private to the adapter: the rest of hymem only ever sees a fact's string hash. `neo4j-driver` is pinned to `~5.27`: from 5.28 the JS driver uses the Bolt manifest handshake, which HydraDB's server answers in several TCP writes and the driver reads as one — a coin-flip connection failure that [`packages/bolt/src/index.ts`](packages/bolt/src/index.ts) also retries around as a backstop.
 
-## Quick start
+## Install
 
 ```bash
-# 1. Build & run a local HydraDB node (Rust 1.91+, libcypher-parser, GraphBLAS — see the HydraDB README)
+npm install @hymem/core @hymem/postgres pg      # or @hymem/sqlite, or @hymem/bolt
+```
+
+```ts
+import { createMemory } from "@hymem/core";
+import { postgres } from "@hymem/postgres";
+import { openai } from "@ai-sdk/openai";
+import { Pool } from "pg";
+
+const memory = createMemory({
+  store: postgres({ client: new Pool({ connectionString: process.env.DATABASE_URL }) }),
+  model: openai("gpt-4o-mini"),
+  namespace: `usr_${userId}`,   // required — the tenant boundary
+});
+
+await memory.remember(session);
+const { contextBlock, abstained } = await memory.recall("where do I live?");
+```
+
+Nothing to run and nothing to install beyond the core if you just want to try it:
+
+```ts
+import { createMemory, memoryStore } from "@hymem/core";
+const memory = createMemory({ store: memoryStore(), model, namespace: "demo" });
+```
+
+### CLI
+
+```bash
+npm install -g @hymem/cli
+
+export MEM_NAMESPACE=local MEM_STORE=sqlite SQLITE_PATH=memory.db MEM_MIGRATE=auto
+export LLM_API_KEY=...                       # any OpenAI-compatible endpoint
+
+hymem ingest examples/sessions.json
+hymem ask "Where does the user live now?"
+hymem inspect user
+```
+
+## Developing this repo
+
+```bash
+npm install          # workspace install
+npm run build        # tsc --build across all packages
+npm run check        # typecheck + the suites that need no services
+
+# Against a live engine:
+npm run conformance sqlite       # no services needed
+npm run conformance postgres     # DATABASE_URL=...
+npm run conformance neo4j        # NEO4J_URL=... (defaults to bolt://127.0.0.1:7688)
+npm run conformance hydradb      # HYDRA_BOLT_URL=...
+```
+
+To run a local HydraDB node (Rust 1.91+, libcypher-parser, GraphBLAS — see the HydraDB README):
+
+```bash
 git clone https://github.com/hydra-db/hydradb.git ~/hydradb
-HYDRADB_REPO=~/hydradb bash scripts/run-hydra.sh   # runs in the foreground
+HYDRADB_REPO=~/hydradb docker compose up -d
+npm run -w @hymem/cli bootstrap    # round-trips a write through the node
+```
 
-# 2. In another shell: install, configure, verify
-npm install
-cp .env.example .env    # set LLM_API_KEY (any OpenAI-compatible endpoint)
-npm run bootstrap       # round-trips a write through the node
+The LongMemEval harness lives in the CLI package:
 
-# 3. Use it
-npm run ingest -- examples/sessions.json
-npm run ask -- "Where does the user live now?"
-npm run ask -- "Where did the user live before that?"
-npm run inspect -- user
-
-# 4. Benchmark (LongMemEval)
-npm run eval -- path/to/longmemeval_s.json 50
+```bash
+npm run -w @hymem/cli eval -- path/to/longmemeval_s.json 50
 ```
 
 ### MCP server (Claude Code and friends)
@@ -214,21 +274,28 @@ Four ports, all replaceable: `MemoryStore` (where facts live), `Extractor` (tran
 ## Repo layout
 
 ```
-src/core/types.ts        domain types — no engine, no I/O
-src/core/ports.ts        MemoryStore, Extractor, QueryPlanner, Answerer
-src/core/ingest.ts       session writes + supersession pass (engine-agnostic)
-src/core/recall.ts       temporal filtering, context formatting (engine-agnostic)
-src/core/memory.ts       createMemory() — the public API
-src/core/ids.ts          fact identity + entity canonicalisation
-src/stores/memory-store.ts   zero-dependency reference store
-src/stores/cypher/       Bolt driver, dialects, MemoryStore over a property graph
-src/stores/sql/          SQL driver seam, dialects, schema ownership, MemoryStore over tables
-src/llm/                 LLM-backed extractor / planner / answerer + JSON repair
-src/testing/conformance.ts   the executable MemoryStore contract
-src/env.ts               the only module that reads process.env (CLI/MCP/eval)
-src/cli.ts               ingest | ask | recall | inspect | forget | conformance
-src/mcp-server.ts        MCP tools: save / recall / list / forget
-src/eval.ts              LongMemEval harness
+packages/core/     @hymem/core      core, ports, algorithms, in-memory store,
+                                    the pure SQL and Cypher stores, conformance
+packages/postgres/ @hymem/postgres  pg driver + postgres()
+packages/sqlite/   @hymem/sqlite    node:sqlite driver + sqlite()
+packages/bolt/     @hymem/bolt      Bolt driver + hydradb()/neo4jStore()/memgraph()
+packages/cli/      @hymem/cli       CLI, MCP server, env wiring, eval harness
+
+packages/core/src/core/types.ts        domain types — no engine, no I/O
+packages/core/src/core/ports.ts        MemoryStore, Extractor, QueryPlanner, Answerer
+packages/core/src/core/ingest.ts       session writes + supersession pass (engine-agnostic)
+packages/core/src/core/recall.ts       temporal filtering, context formatting (engine-agnostic)
+packages/core/src/core/memory.ts       createMemory() — the public API
+packages/core/src/core/ids.ts          fact identity + entity canonicalisation
+packages/core/src/stores/memory-store.ts  zero-dependency reference store
+packages/core/src/stores/cypher/       Bolt driver, dialects, MemoryStore over a property graph
+packages/core/src/stores/sql/          SQL driver seam, dialects, schema ownership, MemoryStore over tables
+packages/core/src/llm/                 LLM-backed extractor / planner / answerer + JSON repair
+packages/core/src/testing/conformance.ts  the executable MemoryStore contract
+packages/cli/src/env.ts                the only module that reads process.env (CLI/MCP/eval)
+packages/cli/src/cli.ts                ingest | ask | recall | inspect | forget | conformance
+packages/cli/src/mcp-server.ts         MCP tools: save / recall / list / forget
+packages/cli/src/eval.ts               LongMemEval harness
 ```
 
 ## Known adjustments on first run
@@ -269,7 +336,7 @@ Everything is injected — no globals, no environment reads, no bundled LLM prov
 
 ```ts
 import { createMemory } from "@hymem/core";
-import { hydradb } from "@hymem/core/stores/cypher";
+import { hydradb } from "@hymem/bolt";
 import { openai } from "@ai-sdk/openai";
 
 const memory = createMemory({
