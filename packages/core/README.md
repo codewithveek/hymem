@@ -155,7 +155,9 @@ console.log(`${result.passed} passed, ${result.failed.length} failed`);
 
 ## Serverless
 
-Core runs on edge runtimes. It reads no global unchecked and uses one Node builtin — `node:crypto` for `createHash`, which Cloudflare Workers supports synchronously under the `nodejs_compat` flag. Pick an adapter that fits: `@hymem/postgres` over a HTTP-capable pool, or `memoryStore()` for per-request scratch memory. `@hymem/sqlite` needs `node:sqlite` and will not run in a Worker.
+Core runs on edge runtimes. It reads no global unchecked and uses one Node builtin — `node:crypto` for `createHash`, which Cloudflare Workers supports synchronously under the `nodejs_compat` flag.
+
+Pick an adapter that fits the runtime: [`@hymem/d1`](https://www.npmjs.com/package/@hymem/d1) on Workers, [`@hymem/tidb`](https://www.npmjs.com/package/@hymem/tidb) with the `fetch`-based TiDB Cloud driver anywhere, or `memoryStore()` for per-request scratch memory. `@hymem/sqlite` needs `node:sqlite` and will not run in a Worker.
 
 ## License
 

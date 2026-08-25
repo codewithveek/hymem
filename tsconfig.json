@@ -11,6 +11,12 @@
       "path": "packages/sqlite"
     },
     {
+      "path": "packages/tidb"
+    },
+    {
+      "path": "packages/d1"
+    },
+    {
       "path": "packages/bolt"
     },
     {

@@ -158,6 +158,8 @@ Custom extractors must emit whatever token you configure.
 | Neo4j | [`@hymem/bolt`](packages/bolt) → `neo4jStore()` | `neo4j-driver` | yes |
 | Memgraph | [`@hymem/bolt`](packages/bolt) → `memgraph()` | `neo4j-driver` | yes |
 | HydraDB | [`@hymem/bolt`](packages/bolt) → `hydradb()` | `neo4j-driver` | no |
+| TiDB / MySQL | [`@hymem/tidb`](packages/tidb) → `tidb()` | `@tidbcloud/serverless` or `mysql2` | yes |
+| Cloudflare D1 | [`@hymem/d1`](packages/d1) → `d1()` | none | no |
 
 **`@hymem/core` depends on `zod` and nothing else**, with `ai` as an optional peer. Both store implementations are pure logic — every dependency lives in a *driver*, which is where the package boundary falls. Install the core plus the one adapter you use and you never pull in a database client you won't call.
 
@@ -349,6 +351,8 @@ Four ports, all replaceable: `MemoryStore` (where facts live), `Extractor` (tran
 | [`@hymem/postgres`](packages/postgres) | `pg` driver + `postgres()` |
 | [`@hymem/sqlite`](packages/sqlite) | `node:sqlite` driver + `sqlite()` |
 | [`@hymem/bolt`](packages/bolt) | Bolt driver + `neo4jStore()` / `memgraph()` / `hydradb()` |
+| [`@hymem/tidb`](packages/tidb) | TiDB Cloud serverless + mysql2 drivers |
+| [`@hymem/d1`](packages/d1) | Cloudflare D1 driver, for Workers |
 | [`@hymem/cli`](packages/cli) | CLI, MCP server, environment wiring, eval harness |
 
 ## Developing this repo
@@ -362,6 +366,8 @@ npm run conformance sqlite      # real SQL, no services
 npm run conformance postgres    # DATABASE_URL=...
 npm run conformance neo4j       # NEO4J_URL=... (default bolt://127.0.0.1:7688)
 npm run conformance hydradb     # HYDRA_BOLT_URL=...
+npm run conformance tidb        # TIDB_URL=... (defaults to mysql://root@127.0.0.1:4000/test)
+npm run conformance d1          # no services — Miniflare provides a local D1
 ```
 
 The benchmark harness ([LongMemEval](https://github.com/xiaowu0162/LongMemEval)) lives in the CLI package:
@@ -372,12 +378,11 @@ npm run -w @hymem/cli eval -- path/to/longmemeval_s.json 50
 
 ## Status
 
-Early. The memory model, tenancy, and the adapter contract are settled and verified across five engines. Known gaps:
+Early. The memory model, tenancy, and the adapter contract are settled and verified across seven engines. Known gaps:
 
 - **Session/thread querying.** Facts record their source session, but you can't yet filter a recall by session or list sessions.
 - **No vector search.** Recall is entity-anchored. `capabilities.vectorSearch` exists for adapters that add it.
 - **HydraDB is not atomic** for concurrent supersession — see [`@hymem/bolt`](packages/bolt).
-- **MySQL/TiDB and Cloudflare D1** adapters are planned, not built.
 
 ## License
 

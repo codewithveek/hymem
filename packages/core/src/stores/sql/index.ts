@@ -25,8 +25,8 @@ export function sql(
 ): Store {
   return makeSqlStore({ driver, ...options });
 }
-export { POSTGRES, SQLITE } from "./dialect.js";
-export type { SqlDialect } from "./dialect.js";
+export { POSTGRES, SQLITE, D1, MYSQL, TIDB } from "./dialect.js";
+export type { SqlDialect, UpsertColumn, InsertShape } from "./dialect.js";
 export type { SqlDriver } from "./driver.js";
 export {
   schemaScript,

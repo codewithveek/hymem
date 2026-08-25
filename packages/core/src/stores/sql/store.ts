@@ -213,15 +213,14 @@ export function sqlStore(options: SqlStoreOptions): MemoryStore {
         binder.bind(previousSessionId ?? null),
         binder.bind(session.speaker ?? null),
       ].join(", ");
+      const session_shape = dialect.upsert(
+        ["namespace", "id"],
+        [{ column: "ts" }, { column: "session_index" }, { column: "previous_session_id" }, { column: "speaker" }],
+      );
       await driver.query(
-        `INSERT INTO ${tables.sessions} (namespace, id, ts, session_index, previous_session_id, speaker)
+        `${session_shape.prefix} ${tables.sessions} (namespace, id, ts, session_index, previous_session_id, speaker)
          VALUES (${values})
-         ${dialect.upsert(["namespace", "id"], [
-           "ts = excluded.ts",
-           "session_index = excluded.session_index",
-           "previous_session_id = excluded.previous_session_id",
-           "speaker = excluded.speaker",
-         ])}`,
+         ${session_shape.tail}`,
         binder.values,
       );
     },
@@ -246,22 +245,25 @@ export function sqlStore(options: SqlStoreOptions): MemoryStore {
         // Re-activation is the whole point of the DO UPDATE: a fact restated
         // after being superseded goes back to active, validFrom is refreshed,
         // and validTo is cleared.
+        const fact_shape = dialect.upsert(["id"], [
+          { column: "namespace" },
+          { column: "subject" },
+          { column: "attribute" },
+          { column: "value" },
+          { column: "fact_text" },
+          { column: "observed_at" },
+          { column: "session_id" },
+          // Literals, not incoming values: a fact restated after being
+          // superseded must go back to active with an open interval.
+          { column: "status", literal: "'active'" },
+          { column: "valid_from" },
+          { column: "valid_to", literal: "NULL" },
+        ]);
         await driver.query(
-          `INSERT INTO ${tables.facts}
+          `${fact_shape.prefix} ${tables.facts}
              (id, namespace, subject, attribute, value, fact_text, observed_at, session_id, status, valid_from, valid_to)
            VALUES (${values}, NULL)
-           ${dialect.upsert(["id"], [
-             "namespace = excluded.namespace",
-             "subject = excluded.subject",
-             "attribute = excluded.attribute",
-             "value = excluded.value",
-             "fact_text = excluded.fact_text",
-             "observed_at = excluded.observed_at",
-             "session_id = excluded.session_id",
-             "status = 'active'",
-             "valid_from = excluded.valid_from",
-             "valid_to = NULL",
-           ])}`,
+           ${fact_shape.tail}`,
           binder.values,
         );
       }
@@ -283,9 +285,10 @@ export function sqlStore(options: SqlStoreOptions): MemoryStore {
           binder.bind(link.factId),
           binder.bind(link.entity),
         ].join(", ");
+        const link_shape = dialect.insertIgnore(["fact_id", "entity"]);
         await driver.query(
-          `INSERT INTO ${tables.factEntities} (namespace, fact_id, entity) VALUES (${values})
-           ${dialect.insertIgnore(["fact_id", "entity"])}`,
+          `${link_shape.prefix} ${tables.factEntities} (namespace, fact_id, entity) VALUES (${values})
+           ${link_shape.tail}`,
           binder.values,
         );
       }
@@ -294,55 +297,91 @@ export function sqlStore(options: SqlStoreOptions): MemoryStore {
     async supersede(incoming: StoredFact) {
       await ensureSchema();
 
-      /** The predicate selecting facts `incoming` overwrites. */
-      const closeClause = (binder: ReturnType<typeof newBinder>) =>
-        `UPDATE ${tables.facts}
-            SET status = 'superseded', valid_to = ${binder.bind(incoming.observedAt)}
-          WHERE namespace = ${binder.bind(incoming.namespace)}
+      /** Predicate selecting the active facts `incoming` overwrites. */
+      const whereSupersedable = (binder: ReturnType<typeof newBinder>) =>
+        `namespace = ${binder.bind(incoming.namespace)}
             AND status = 'active'
             AND id <> ${binder.bind(incoming.id)}
             AND subject = ${binder.bind(incoming.subject)}
             AND attribute = ${binder.bind(incoming.attribute)}
             AND value <> ${binder.bind(incoming.value)}
-            AND observed_at < ${binder.bind(incoming.observedAt)}
-          RETURNING id`;
+            AND observed_at < ${binder.bind(incoming.observedAt)}`;
+
+      const closeStatement = (binder: ReturnType<typeof newBinder>) =>
+        `UPDATE ${tables.facts}
+            SET status = 'superseded', valid_to = ${binder.bind(incoming.observedAt)}
+          WHERE ${whereSupersedable(binder)}`;
+
+      const linkStatement = (session: SqlDriver, supersededId: string) => {
+        const binder = newBinder();
+        const values = [binder.bind(incoming.id), binder.bind(supersededId)].join(", ");
+        const shape = dialect.insertIgnore(["new_fact_id", "old_fact_id"]);
+        return session.query(
+          `${shape.prefix} ${tables.supersedes} (new_fact_id, old_fact_id) VALUES (${values})
+           ${shape.tail}`,
+          binder.values,
+        );
+      };
 
       // Postgres: close and chain in ONE statement. A data-modifying CTE makes
-      // the whole thing a single atomic unit with no window for a second writer.
-      if (dialect.dataModifyingCte) {
+      // the whole thing atomic with no window for a second writer.
+      if (dialect.dataModifyingCte && dialect.returning) {
         const binder = newBinder();
-        const closed = closeClause(binder);
+        const shape = dialect.insertIgnore(["new_fact_id", "old_fact_id"]);
         const rows = await driver.query<{ old_fact_id: string }>(
-          `WITH closed AS (${closed})
-           INSERT INTO ${tables.supersedes} (new_fact_id, old_fact_id)
+          `WITH closed AS (${closeStatement(binder)} RETURNING id)
+           ${shape.prefix} ${tables.supersedes} (new_fact_id, old_fact_id)
            SELECT ${binder.bind(incoming.id)}, id FROM closed
-           ${dialect.insertIgnore(["new_fact_id", "old_fact_id"])}
+           ${shape.tail}
            RETURNING old_fact_id`,
           binder.values,
         );
         return rows.map((row) => row.old_fact_id);
       }
 
-      // SQLite and friends: two statements, wrapped so they still commit as one.
-      const run = async (transactional: SqlDriver): Promise<string[]> => {
-        const closeBinder = newBinder();
-        const closedRows = await transactional.query<{ id: string }>(
-          closeClause(closeBinder),
-          closeBinder.values,
+      // SQLite: UPDATE ... RETURNING gives the ids back, then the chain rows
+      // follow inside the same transaction.
+      if (dialect.returning) {
+        const run = async (session: SqlDriver): Promise<string[]> => {
+          const binder = newBinder();
+          const closedRows = await session.query<{ id: string }>(
+            `${closeStatement(binder)} RETURNING id`,
+            binder.values,
+          );
+          const supersededIds = closedRows.map((row) => row.id);
+          for (const supersededId of supersededIds) await linkStatement(session, supersededId);
+          return supersededIds;
+        };
+        return driver.transaction ? driver.transaction(run) : run(driver);
+      }
+
+      // MySQL and TiDB have no RETURNING at all, so the doomed ids must be read
+      // before they are closed. That read-then-write is exactly the race the
+      // transaction exists to close; without one the store reports
+      // atomicSupersede: false rather than pretending.
+      const run = async (session: SqlDriver): Promise<string[]> => {
+        const selectBinder = newBinder();
+        const doomed = await session.query<{ id: string }>(
+          `SELECT id FROM ${tables.facts} WHERE ${whereSupersedable(selectBinder)}`,
+          selectBinder.values,
         );
-        const supersededIds = closedRows.map((row) => row.id);
-        for (const supersededId of supersededIds) {
-          const linkBinder = newBinder();
-          const values = [linkBinder.bind(incoming.id), linkBinder.bind(supersededId)].join(", ");
-          await transactional.query(
-            `INSERT INTO ${tables.supersedes} (new_fact_id, old_fact_id) VALUES (${values})
-             ${dialect.insertIgnore(["new_fact_id", "old_fact_id"])}`,
-            linkBinder.values,
+        const supersededIds = doomed.map((row) => row.id);
+        if (supersededIds.length === 0) return [];
+
+        for (const batch of chunked(supersededIds, 2)) {
+          const updateBinder = newBinder();
+          const validTo = updateBinder.bind(incoming.observedAt);
+          const idList = updateBinder.list(batch);
+          await session.query(
+            `UPDATE ${tables.facts}
+                SET status = 'superseded', valid_to = ${validTo}
+              WHERE id IN (${idList})`,
+            updateBinder.values,
           );
         }
+        for (const supersededId of supersededIds) await linkStatement(session, supersededId);
         return supersededIds;
       };
-
       return driver.transaction ? driver.transaction(run) : run(driver);
     },
 

@@ -66,6 +66,8 @@
     "pg": "^8"
   },
   "devDependencies": {
-    "@types/pg": "^8.23.1"
+    "@types/pg": "^8.23.1",
+    "miniflare": "^4.20260730.0",
+    "mysql2": "^3.24.2"
   }
 }

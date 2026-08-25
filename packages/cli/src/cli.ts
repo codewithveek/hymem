@@ -116,14 +116,18 @@ program
 program
   .command("schema")
   .description("Print the SQL DDL for a store, to apply through your own migration tool")
-  .option("--dialect <name>", "postgres | sqlite", "postgres")
+  .option("--dialect <name>", "postgres | sqlite | mysql | tidb | d1", "postgres")
   .option("--prefix <prefix>", "table-name prefix", "hymem_")
   .action(async (options: { dialect: string; prefix: string }) => {
-    const { schemaScript, POSTGRES, SQLITE } = await import("@hymem/core/stores/sql");
-    const dialects = { postgres: POSTGRES, sqlite: SQLITE };
+    const { schemaScript, POSTGRES, SQLITE, MYSQL, TIDB, D1 } = await import(
+      "@hymem/core/stores/sql"
+    );
+    const dialects = { postgres: POSTGRES, sqlite: SQLITE, mysql: MYSQL, tidb: TIDB, d1: D1 };
     const dialect = dialects[options.dialect as keyof typeof dialects];
     if (!dialect) {
-      console.error(`Unknown dialect "${options.dialect}". Expected: postgres or sqlite.`);
+      console.error(
+        `Unknown dialect "${options.dialect}". Expected: ${Object.keys(dialects).join(", ")}.`,
+      );
       process.exitCode = 1;
       return;
     }
