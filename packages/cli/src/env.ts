@@ -50,16 +50,16 @@ export function modelFromEnv(): LanguageModel {
 /**
  * Build the configured store.
  *
- * MEM_STORE: hydradb (default) | neo4j | memgraph | postgres | sqlite | memory.
- * "memory" needs no services at all, which makes it the right choice for
- * trying the CLI before standing anything up.
+ * MEM_STORE: sqlite (default) | postgres | neo4j | memgraph | hydradb | memory.
+ * SQLite is the default because it needs nothing installed — node:sqlite is a
+ * Node builtin — and unlike "memory" it survives the process.
  *
  * Async because the SQL adapters import their driver on demand: `pg` and
  * `better-sqlite3` are optional here, so someone running against HydraDB never
  * has to install them.
  */
 export async function storeFromEnv(): Promise<MemoryStore> {
-  const kind = process.env.MEM_STORE ?? "hydradb";
+  const kind = process.env.MEM_STORE ?? "sqlite";
   const url = process.env.HYDRA_BOLT_URL ?? process.env.BOLT_URL;
   const token = process.env.HYDRA_TOKEN ?? "local-development-token-32-bytes";
   const user = process.env.BOLT_USER;
@@ -96,7 +96,7 @@ export async function storeFromEnv(): Promise<MemoryStore> {
     }
     default:
       throw new Error(
-        `Unknown MEM_STORE "${kind}". Expected: hydradb, neo4j, memgraph, postgres, sqlite, or memory.`,
+        `Unknown MEM_STORE "${kind}". Expected: sqlite, postgres, neo4j, memgraph, hydradb, or memory.`,
       );
   }
 }

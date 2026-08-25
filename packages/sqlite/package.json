@@ -1,6 +1,6 @@
 {
   "name": "@hymem/sqlite",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "SQLite storage adapter for hymem (node:sqlite or better-sqlite3)",
   "keywords": [
     "hymem",
@@ -40,6 +40,6 @@
     "access": "public"
   },
   "dependencies": {
-    "@hymem/core": "0.1.1"
+    "@hymem/core": "0.1.2"
   }
 }

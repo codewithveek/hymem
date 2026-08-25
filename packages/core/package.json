@@ -1,6 +1,6 @@
 {
   "name": "@hymem/core",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Multi-tenant temporal knowledge-graph agent memory with pluggable stores",
   "keywords": [
     "agent-memory",

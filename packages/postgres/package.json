@@ -1,6 +1,6 @@
 {
   "name": "@hymem/postgres",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Postgres storage adapter for hymem",
   "keywords": [
     "hymem",
@@ -40,7 +40,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@hymem/core": "0.1.1"
+    "@hymem/core": "0.1.2"
   },
   "peerDependencies": {
     "pg": "^8"
