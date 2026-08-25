@@ -59,7 +59,7 @@ export function modelFromEnv(): LanguageModel {
  * has to install them.
  */
 export async function storeFromEnv(): Promise<MemoryStore> {
-  const kind = process.env.MEM_STORE ?? "sqlite";
+  const kind = storeKindFromEnv();
   const url = process.env.HYDRA_BOLT_URL ?? process.env.BOLT_URL;
   const token = process.env.HYDRA_TOKEN ?? "local-development-token-32-bytes";
   const user = process.env.BOLT_USER;
@@ -89,7 +89,7 @@ export async function storeFromEnv(): Promise<MemoryStore> {
       const { sqlite } = await import("@hymem/sqlite");
       const { DatabaseSync } = await import("node:sqlite");
       return sqlite({
-        database: new DatabaseSync(process.env.SQLITE_PATH ?? "hymem.db"),
+        database: new DatabaseSync(sqlitePathFromEnv()),
         migrate,
         tablePrefix,
       });
@@ -98,6 +98,73 @@ export async function storeFromEnv(): Promise<MemoryStore> {
       throw new Error(
         `Unknown MEM_STORE "${kind}". Expected: sqlite, postgres, neo4j, memgraph, hydradb, or memory.`,
       );
+  }
+}
+
+/** Where `storeFromEnv()` will read and write. */
+export interface StoreTarget {
+  /** MEM_STORE with the default applied — never the raw env var. */
+  kind: string;
+  /** Where it points: a file path, a URL with credentials stripped, or "in-process". */
+  target: string;
+  /**
+   * True when the store dies with the process, so writing to it destroys
+   * nothing. Anything else is somebody's real data until proven otherwise.
+   */
+  ephemeral: boolean;
+}
+
+/**
+ * Describe the store WITHOUT building it.
+ *
+ * This exists so a caller can decide whether an operation is safe before it
+ * opens a connection — and so nothing has to restate the defaults that
+ * `storeFromEnv` applies. A second copy of "?? sqlite" is a bug waiting to
+ * print one store's name while another one is being written to.
+ */
+export function storeTargetFromEnv(): StoreTarget {
+  const kind = storeKindFromEnv();
+  switch (kind) {
+    case "memory":
+      return { kind, target: "in-process", ephemeral: true };
+    case "sqlite": {
+      const path = sqlitePathFromEnv();
+      // ":memory:" is SQLite's own name for a database that never touches disk.
+      return { kind, target: path, ephemeral: path === ":memory:" };
+    }
+    case "postgres":
+      return {
+        kind,
+        target: withoutCredentials(process.env.DATABASE_URL ?? process.env.PG_URL),
+        ephemeral: false,
+      };
+    case "neo4j":
+    case "memgraph":
+    case "hydradb":
+      return {
+        kind,
+        target: withoutCredentials(process.env.HYDRA_BOLT_URL ?? process.env.BOLT_URL),
+        ephemeral: false,
+      };
+    default:
+      // An unknown kind is storeFromEnv's error to raise, not ours to guess at.
+      return { kind, target: "unknown", ephemeral: false };
+  }
+}
+
+const storeKindFromEnv = () => process.env.MEM_STORE ?? "sqlite";
+const sqlitePathFromEnv = () => process.env.SQLITE_PATH ?? "hymem.db";
+
+/** A connection string is printable only once the password is out of it. */
+function withoutCredentials(connectionString: string | undefined): string {
+  if (!connectionString) return "unset";
+  try {
+    const parsed = new URL(connectionString);
+    if (parsed.password) parsed.password = "***";
+    return parsed.toString();
+  } catch {
+    // Not a URL we can parse — say so rather than risk printing a secret.
+    return "(unparseable connection string)";
   }
 }
 

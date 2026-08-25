@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
 import { Command } from "commander";
-import { memoryFromEnv, namespaceFromEnv, storeFromEnv } from "./env.js";
+import { memoryFromEnv, namespaceFromEnv, storeFromEnv, storeTargetFromEnv } from "./env.js";
 import { runStoreConformance, CONFORMANCE_TEST_COUNT } from "@hymem/core/testing";
 import type { SessionInput } from "@hymem/core";
 import type { Memory } from "@hymem/core";
@@ -92,10 +92,35 @@ program
 program
   .command("conformance")
   .description("Verify the configured store against the MemoryStore contract")
-  .action(async () => {
+  .option("--force", "allow the run against a persistent store, deleting what it finds there")
+  .action(async (options: { force?: boolean }) => {
+    // The suite is destructive by design: it clears "tenant_a" and "tenant_b"
+    // before AND after every test, so it starts from a known state and leaves
+    // nothing behind. Pointed at the store an application actually uses — which
+    // is what MEM_STORE names, and what the sqlite default silently is — that
+    // is permanent data loss for anyone whose namespaces happen to collide.
+    const target = storeTargetFromEnv();
+    if (!target.ephemeral && !options.force) {
+      console.error(
+        `hymem: refusing to run the conformance suite against ${target.kind} (${target.target}).\n\n` +
+          `The suite DELETES everything in the "tenant_a" and "tenant_b" namespaces,\n` +
+          `before and after each of its ${CONFORMANCE_TEST_COUNT} tests. MEM_STORE names the store this\n` +
+          `application uses, so that is real data unless you know otherwise.\n\n` +
+          `Run it against something disposable instead:\n\n` +
+          `  MEM_STORE=memory hymem conformance\n` +
+          `  MEM_STORE=sqlite SQLITE_PATH=:memory: MEM_MIGRATE=auto hymem conformance\n\n` +
+          `Or, if this target really is a scratch database:\n\n` +
+          `  hymem conformance --force\n`,
+      );
+      process.exitCode = 1;
+      return;
+    }
+
     const store = await storeFromEnv();
-    console.log(`Running ${CONFORMANCE_TEST_COUNT} conformance tests against ${process.env.MEM_STORE ?? "hydradb"}:\n`);
-    console.log('(the suite uses its own "tenant_a"/"tenant_b" namespaces)\n');
+    console.log(
+      `Running ${CONFORMANCE_TEST_COUNT} conformance tests against ${target.kind} (${target.target}):\n`,
+    );
+    console.log('(the suite writes, then DELETES, its own "tenant_a"/"tenant_b" namespaces)\n');
     const result = await runStoreConformance(() => store, { verbose: true });
     console.log(
       `\n${result.passed} passed, ${result.failed.length} failed, ${result.skipped.length} skipped`,
