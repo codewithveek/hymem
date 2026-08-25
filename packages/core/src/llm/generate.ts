@@ -16,6 +16,16 @@ export async function text(model: LanguageModel, system: string, prompt: string)
 const OBJECT_ATTEMPTS = 3;
 
 /**
+ * `process` does not exist in every runtime this can be deployed to — edge
+ * workers and Deno without the Node compatibility layer among them — and a bare
+ * `process.env.X` is a ReferenceError there, not a falsy read. Core is meant to
+ * run wherever the caller's store does, so it reads no global without checking.
+ */
+function isDebugEnabled(): boolean {
+  return typeof process !== "undefined" && !!process.env?.HYMEM_DEBUG;
+}
+
+/**
  * Schema-validated structured generation.
  *
  * OpenAI-compatible backends without structured outputs (e.g. DashScope/Qwen)
@@ -53,7 +63,7 @@ export async function object<T>(
       if (!NoObjectGeneratedError.isInstance(error) || attempt >= OBJECT_ATTEMPTS) throw error;
       const reason =
         error.cause instanceof Error ? error.cause.message : String(error.cause ?? error.message);
-      if (process.env.HYMEM_DEBUG) {
+      if (isDebugEnabled()) {
         console.error(
           `[llm] attempt ${attempt}/${OBJECT_ATTEMPTS} did not match schema: ${reason.split("\n")[0]}\n  raw: ${(error.text ?? "").slice(0, 400)}`,
         );
