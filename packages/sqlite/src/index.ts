@@ -1,7 +1,7 @@
 /**
  * @hymem/sqlite — SQLite storage for hymem.
  *
- *   import { createMemory } from "hymem";
+ *   import { createMemory } from "@hymem/core";
  *   import { sqlite } from "@hymem/sqlite";
  *   import { DatabaseSync } from "node:sqlite";
  *
@@ -14,8 +14,8 @@
  * No peer dependency at all: `node:sqlite` is built into Node 22.5+.
  * better-sqlite3 works too — it wears the same prepare/all/run shape.
  */
-import { sqlStore, SQLITE } from "hymem/stores/sql";
-import type { MemoryStore, SqlDriver, MigrateMode } from "hymem/stores/sql";
+import { sqlStore, SQLITE } from "@hymem/core/stores/sql";
+import type { MemoryStore, SqlDriver, MigrateMode } from "@hymem/core/stores/sql";
 
 /**
  * Minimal shape of a synchronous SQLite handle (node:sqlite, better-sqlite3).
@@ -39,6 +39,7 @@ export function sqliteDriver(database: SqliteLike): SqlDriver {
   // `RETURNING` makes an UPDATE/DELETE/INSERT produce rows too, so dispatch on
   // that as well as on the leading keyword.
   const RETURNS_ROWS = /^\s*(SELECT|PRAGMA|WITH)\b|\bRETURNING\b/i;
+  let closed = false;
   const driver: SqlDriver = {
     dialect: SQLITE,
     async query<T>(sql: string, params: unknown[]): Promise<T[]> {
@@ -50,6 +51,10 @@ export function sqliteDriver(database: SqliteLike): SqlDriver {
       return statement.all(...params) as T[];
     },
     async close() {
+      // DatabaseSync.close() throws when the database is not open, and the
+      // store contract promises a second close is harmless.
+      if (closed) return;
+      closed = true;
       database.close?.();
     },
   };
@@ -102,5 +107,5 @@ export function sqlite(options: SqliteOptions): MemoryStore {
   });
 }
 
-export { SQLITE } from "hymem/stores/sql";
-export type { SqlDriver, MigrateMode } from "hymem/stores/sql";
+export { SQLITE } from "@hymem/core/stores/sql";
+export type { SqlDriver, MigrateMode } from "@hymem/core/stores/sql";

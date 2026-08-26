@@ -1,0 +1,98 @@
+---
+title: Quick start
+description: Store your first memory in about a minute, with no database.
+---
+
+## Install
+
+```bash
+npm install @hymem/core ai @ai-sdk/openai
+```
+
+`@hymem/core` depends on `zod` and nothing else. The in-memory store needs no
+services, so you can try the whole model before choosing a database.
+
+## Remember and recall
+
+```ts
+import { createMemory, memoryStore } from "@hymem/core";
+import { openai } from "@ai-sdk/openai";
+
+const memory = createMemory({
+  store: memoryStore(),
+  model: openai("gpt-4o-mini"),
+  namespace: "demo",              // required — the tenant boundary
+});
+
+await memory.rememberAll([
+  {
+    id: "s1", idx: 0, ts: "2026-03-01T10:00:00Z",
+    turns: [{ role: "user", content: "I just moved to Atlanta for a job at Delta." }],
+  },
+  {
+    id: "s2", idx: 1, ts: "2026-07-20T18:30:00Z",
+    turns: [{ role: "user", content: "I relocated to Denver last week." }],
+  },
+]);
+```
+
+Now ask it three questions:
+
+```ts
+await memory.ask("Where do I live now?");
+// "Denver, as of the July 20 2026 session."
+
+await memory.ask("Where did I live before that?");
+// "Atlanta — you moved there in March 2026 and relocated in July."
+
+await memory.ask("What's my shoe size?");
+// "I don't know based on the conversation history."
+```
+
+The third one never reached the model. Nothing in memory supported an answer, so
+recall abstained structurally — see [abstention](/docs/concepts#recall-and-abstention).
+
+## Use the facts, not the prose
+
+Most agents want the retrieved facts to put in their own prompt:
+
+```ts
+const { facts, contextBlock, abstained } = await memory.recall("where do I live?");
+
+if (!abstained) {
+  messages.push({ role: "system", content: `What you know:\n${contextBlock}` });
+}
+```
+
+`contextBlock` is prompt-ready, chronological, and annotates what changed:
+
+```
+- [2026-07-20T18:30:00Z · session s2] The user relocated to Denver.
+    (previously: "Atlanta" until 2026-07-20T18:30:00Z)
+```
+
+<Callout title="Recall-only memories">
+Pass `answerer: null` to build a memory with no synthesis stage at all. `recall()`
+works, `ask()` throws, and you never pay for a second model call.
+</Callout>
+
+## Add a real database
+
+Swap the store; nothing else changes.
+
+```bash
+npm install @hymem/sqlite
+```
+
+```ts
+import { sqlite } from "@hymem/sqlite";
+import { DatabaseSync } from "node:sqlite";
+
+const memory = createMemory({
+  store: sqlite({ database: new DatabaseSync("memory.db"), migrate: "auto" }),
+  model: openai("gpt-4o-mini"),
+  namespace: "demo",
+});
+```
+
+See [storage adapters](/docs/stores) for the other six engines.

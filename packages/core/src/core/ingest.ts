@@ -1,4 +1,4 @@
-import { canonEntity, DEFAULT_SPEAKER_TOKEN, factId } from "./ids.js";
+import { aliasEntity, canonEntity, DEFAULT_SPEAKER_TOKEN, factId } from "./ids.js";
 import type { ExtractedFact, MemoryStore } from "./ports.js";
 import type { Fact, SessionInput, StoredFact } from "./types.js";
 
@@ -49,6 +49,16 @@ export function identifyFacts(
     // Dual-link: facts keyed by an opaque speaker id stay reachable by name,
     // so "what did Bob decide?" resolves even though the subject is usr_7f3a91.
     if (speakerName && subject === speaker) entities.add(speakerName);
+
+    // Aliases become extra entity links, so "where does my wife live?" reaches
+    // facts stored under "sarah". Only aliases whose target is actually in this
+    // fact are linked — an extractor that invents a mapping cannot attach it to
+    // an unrelated fact.
+    for (const { alias, of } of fact.aliases ?? []) {
+      const target = resolve(of);
+      if (!alias?.trim() || !entities.has(target)) continue;
+      entities.add(aliasEntity(alias, speaker));
+    }
 
     return {
       ...fact,

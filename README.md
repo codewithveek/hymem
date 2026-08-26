@@ -1,201 +1,321 @@
 # hymem
 
-**Temporal knowledge-graph agent memory, with pluggable storage.**
-Originally built for Hack Hydra 2026 · Track 03 (Memory and context retrieval).
+**Temporal, multi-tenant memory for AI agents — with pluggable storage.**
 
-Agents forget across sessions, and long-context models fail on exactly three things LongMemEval measures: chronology, information that was later overwritten, and knowing when the answer isn't there. hymem treats memory as what it actually is — a **temporal graph** — instead of a bag of embeddings:
+Agents forget between sessions. Bolting a vector store on gets you *similar* text, but it can't tell you that the user moved to Denver in July and used to live in Atlanta, and it will happily invent an answer when it has nothing.
 
-- Facts carry validity intervals (`validFrom` / `validTo`), so every value has a lifetime rather than just a latest state.
-- When new information contradicts old information about the same `(subject, attribute)`, the old fact is closed and chained via a `[:SUPERSEDES]` edge — so *"where does the user live?"* and *"where did they live before?"* both have first-class answers.
-- Every fact is linked to its source session: inspectable, traceable, deletable. No hidden embeddings.
-- Recall is **entity-anchored lookup + temporal filtering**, and abstention is **structural**: no supporting facts → "I don't know based on the conversation history," before an LLM ever gets a chance to guess.
-- **Memory is multi-tenant.** Every fact is scoped to a required `namespace`, so one store serves many users or organisations without a connection pool each.
-- **The storage engine is an adapter.** The memory model above is implemented once, against a `MemoryStore` port; HydraDB, Neo4j, Memgraph, and a zero-dependency in-memory store are interchangeable, and any adapter is verifiable against a shipped conformance suite.
+hymem stores memory as **facts with lifetimes**, not embeddings:
 
-It ships in two usable forms: a CLI/eval pipeline for LongMemEval, and an **MCP server** so Claude Code (or any MCP client) gets persistent cross-session memory backed by the graph.
+- **Bitemporal.** Every fact carries `validFrom` / `validTo`. When a later session contradicts an earlier one about the same `(subject, attribute)`, the old value is *closed*, not deleted — so "where do they live?" and "where did they live before?" both have real answers.
+- **Structurally honest.** If nothing supports an answer, recall abstains *before* the model is asked. No supporting facts, no guess.
+- **Inspectable.** Every fact traces to the session that produced it, and can be listed, exported, or deleted individually. Nothing is hidden inside a vector — including aliases, so *"where does my wife live?"* reaches facts stored under `sarah` by exact match rather than similarity.
+- **Multi-tenant.** Every fact is scoped to a required `namespace`. One database serves every user or organisation.
+- **Storage-agnostic.** The memory model is implemented once against a `MemoryStore` port. Postgres, SQLite, Neo4j, Memgraph, HydraDB, and an in-memory store are interchangeable — and any adapter is verified by a shipped conformance suite.
 
-## Storage adapters
+---
 
-The memory model — extraction, fact identity, supersession, bitemporal validity, entity-anchored recall, structural abstention — lives in `src/core/` and knows nothing about any engine. Persistence is a port, `MemoryStore` ([`src/core/ports.ts`](src/core/ports.ts)): ten methods that speak *facts*, not nodes or rows.
-
-| Store | Package | Peer dependency |
-| --- | --- | --- |
-| In-memory | `hymem` → `memoryStore()` | none |
-| SQLite | `@hymem/sqlite` → `sqlite()` | none (`node:sqlite` is built in) |
-| Postgres | `@hymem/postgres` → `postgres()` | `pg` |
-| HydraDB | `@hymem/bolt` → `hydradb()` | `neo4j-driver` |
-| Neo4j | `@hymem/bolt` → `neo4jStore()` | `neo4j-driver` |
-| Memgraph | `@hymem/bolt` → `memgraph()` | `neo4j-driver` |
-
-**`hymem` itself depends on `zod` and nothing else**, with `ai` as an optional
-peer. Both store implementations are pure logic — the dependencies live entirely
-in the *drivers*, which is where the package boundary falls. Install the core
-plus the one adapter you use, and you never pull in a database client you will
-not call.
-
-Packages are split where dependencies genuinely differ. `pg` and better-sqlite3
-are different installs, so those are separate packages; HydraDB, Neo4j and
-Memgraph all speak Bolt and share one peer dependency, so they are one.
-
-Every adapter is checked against the same executable contract:
+## Install
 
 ```bash
-npm run conformance            # in-memory reference store
-npm run conformance sqlite     # real SQL, no install (node:sqlite)
-npm run conformance postgres   # a live Postgres
-npm run conformance neo4j      # a live Neo4j
-npm run conformance hydradb    # a live HydraDB node
+npm install @hymem/core @hymem/sqlite      # or @hymem/postgres, or @hymem/bolt
 ```
 
-All five pass the identical suite. That the same ten methods land naturally on a property graph *and* on four SQL tables is the evidence the port sits at the right altitude.
+You also need a model. hymem never bundles one — bring any [AI SDK](https://sdk.vercel.ai) provider:
 
-## Tenancy
-
-Every operation is scoped to a `namespace`, and it is **required with no default** — an accidentally shared namespace is a data leak, so it has to be a decision rather than an omission.
-
-```ts
-createMemory({ store, model, namespace: "usr_alice" })   // personal memory
-createMemory({ store, model, namespace: "org_42" })      // shared team memory
+```bash
+npm install ai @ai-sdk/openai
 ```
 
-One store serves every tenant. The namespace travels with each call rather than being baked into the store, so a thousand tenants share one connection pool instead of needing a pool each.
+## Quick start
 
-### Sharing memory inside an organisation
-
-A shared namespace needs one more thing, or it silently corrupts data. The extractor canonicalises whoever is talking to `"user"`, so without an identity Alice and Bob produce the *same* fact id — and Bob moving to Denver would mark Alice's home city `superseded`.
-
-So give each session a speaker:
+No database required to try it:
 
 ```ts
-await memory.remember({ id, ts, idx, turns, speaker: "usr_alice" });
-await memory.remember({ id, ts, idx, turns, speaker: "usr_bob" });
+import { createMemory, memoryStore } from "@hymem/core";
+import { openai } from "@ai-sdk/openai";
 
+const memory = createMemory({
+  store: memoryStore(),              // swap for postgres()/sqlite()/hydradb() later
+  model: openai("gpt-4o-mini"),
+  namespace: "demo",                 // required — the tenant boundary
+});
+
+await memory.rememberAll([
+  {
+    id: "s1", idx: 0, ts: "2026-03-01T10:00:00Z",
+    turns: [{ role: "user", content: "I just moved to Atlanta for a job at Delta." }],
+  },
+  {
+    id: "s2", idx: 1, ts: "2026-07-20T18:30:00Z",
+    turns: [{ role: "user", content: "I relocated to Denver last week." }],
+  },
+]);
+
+await memory.ask("Where do I live now?");
+// "Denver, as of the July 20 2026 session."
+
+await memory.ask("Where did I live before that?");
+// "Atlanta — you moved there in March 2026 and relocated in July."
+
+await memory.ask("What's my shoe size?");
+// "I don't know based on the conversation history."  ← abstained, never reached the model
+```
+
+### Recall without an answer
+
+Most agents want the *facts*, not prose — retrieve them and put them in your own prompt:
+
+```ts
+const { facts, contextBlock, abstained } = await memory.recall("where do I live?");
+
+if (!abstained) {
+  // contextBlock is prompt-ready, chronological, and annotates superseded values:
+  //   - [2026-07-20T18:30:00Z · session s2] The user relocated to Denver.
+  //       (previously: "Atlanta" until 2026-07-20T18:30:00Z)
+  messages.push({ role: "system", content: `What you know:\n${contextBlock}` });
+}
+```
+
+Building a recall-only memory skips the answerer entirely:
+
+```ts
+createMemory({ store, model, namespace, answerer: null });
+```
+
+---
+
+## Core concepts
+
+### Facts
+
+Extraction turns a transcript into triples: `(subject, attribute, value)`, plus a sentence, the entities involved, and the source session. A fact's identity is `hash(namespace, subject, attribute, value)` — so re-stating something is idempotent, and re-ingesting a whole history changes nothing.
+
+### Supersession
+
+Two facts collide when they share `(subject, attribute)` inside a namespace but hold different values. The later one wins: the earlier is marked `superseded` and stamped with `validTo`, and a link records what replaced what. Nothing is destroyed, so history stays queryable.
+
+Restating an old value *re-activates* it — moving back to Atlanta reopens that fact rather than creating a third.
+
+### Recall and abstention
+
+A question is mapped to lookup keys (which entities, which attribute slots, and whether it's asking about now, a point in time, or a change), then facts are fetched, filtered against the timeline, and rendered chronologically.
+
+If fewer than `abstainThreshold` facts support the question, `recall()` returns `abstained: true` and `ask()` returns a fixed refusal **without calling the model**. This is the difference between a memory that says "I don't know" and one that confabulates.
+
+### Namespaces
+
+`namespace` is required, with no default — an accidentally shared namespace is a data leak, so it has to be a decision.
+
+```ts
+createMemory({ store, model, namespace: `usr_${userId}` })   // personal memory
+createMemory({ store, model, namespace: `org_${orgId}` })    // shared team memory
+```
+
+One store serves every tenant; the namespace travels with each call, so a thousand tenants share one connection pool rather than needing one each.
+
+### Speakers
+
+A shared namespace needs one more thing or it silently corrupts data. Extraction canonicalises whoever is talking to `"user"`, so without an identity Alice and Bob produce the *same* fact id — and Bob moving to Denver would mark Alice's home city superseded.
+
+```ts
+await memory.remember({ ...session, speaker: "usr_alice" });
 await memory.recall("where do I live?", { speaker: "usr_alice" });
 ```
 
-`speaker` is an opaque string you supply — hymem never generates one, because your auth system already has a stable id. Identity never comes from the model: ask an LLM to name the speaker and you get `alice`, `Alice`, and `alice smith` across three sessions.
+`speaker` is an opaque string you supply; hymem never invents one, because your auth system already has a stable id. Identity never comes from the model — ask an LLM to name the speaker and you get `alice`, `Alice`, and `alice smith` across three sessions.
 
-**One person per namespace needs no speaker at all** — the namespace already is the identity, and the token stays literal.
+**One person per namespace needs no speaker** — the namespace is already the identity.
 
-### Opaque ids and display names
-
-Using `usr_7f3a91` rather than `alice` survives renames and stops two people named Alice colliding. The catch is that name-based recall stops matching: a question about "Bob" plans a lookup for the string `bob`, which never touches `usr_bob123`.
-
-Pass `speakerName` and hymem links both, so the id stays the identity and the name remains a working alias:
+Using an opaque id (`usr_7f3a91`) survives renames and stops two people named Alice colliding, but a question naming "Bob" plans a lookup for the string `bob`. Pass `speakerName` and hymem links both, keeping the id as identity and the name as a working alias:
 
 ```ts
 await memory.remember({ ...session, speaker: "usr_7f3a91", speakerName: "bob" });
 ```
 
-### The `"user"` token
+<details>
+<summary>The <code>"user"</code> token</summary>
 
 `"user"` does double duty: the placeholder for the speaker, and a word people genuinely use. *"The user clicked export and it crashed"* is about a product's end user — but with `speaker` set it would be rewritten into a fact about the speaker.
 
-The substitution only runs when `speaker` is set, so single-speaker namespaces are never exposed. If your domain does talk about users literally, change the token:
+The substitution only runs when `speaker` is set, so single-speaker namespaces are never exposed. If your domain talks about users literally, change the token:
 
 ```ts
 createMemory({ store, model, namespace, speakerToken: "__self__" })
 ```
 
 Custom extractors must emit whatever token you configure.
+</details>
 
-### What tenancy is not
+---
 
-This is **application-level isolation, not database-level**. Facts carry a namespace column, every query filters on it, and the conformance suite verifies that search, listing, supersession, deletion, and history all refuse to cross the boundary. But it is still hymem enforcing the rule in SQL it generates.
+## Storage adapters
 
-If you need a guarantee that survives a bug in this library — regulated data, untrusted tenants — put Postgres row-level security underneath it, or give each tenant its own database. Namespacing is the right default; it is not the boundary to stake compliance on alone.
+| Store | Package | Peer dependency | Atomic supersede |
+| --- | --- | --- | --- |
+| In-memory | `@hymem/core` → `memoryStore()` | none | yes |
+| SQLite | [`@hymem/sqlite`](packages/sqlite) → `sqlite()` | none (`node:sqlite` is built in) | yes |
+| Postgres | [`@hymem/postgres`](packages/postgres) → `postgres()` | `pg` | yes |
+| Neo4j | [`@hymem/bolt`](packages/bolt) → `neo4jStore()` | `neo4j-driver` | yes |
+| Memgraph | [`@hymem/bolt`](packages/bolt) → `memgraph()` | `neo4j-driver` | yes |
+| HydraDB | [`@hymem/bolt`](packages/bolt) → `hydradb()` | `neo4j-driver` | no |
+| TiDB / MySQL | [`@hymem/tidb`](packages/tidb) → `tidb()` | `@tidbcloud/serverless` or `mysql2` | yes |
+| Cloudflare D1 | [`@hymem/d1`](packages/d1) → `d1()` | none | no |
+
+**`@hymem/core` depends on `zod` and nothing else**, with `ai` as an optional peer. Both store implementations are pure logic — every dependency lives in a *driver*, which is where the package boundary falls. Install the core plus the one adapter you use and you never pull in a database client you won't call.
 
 ### Any ORM, without an adapter per ORM
 
-The SQL store is written once against a two-method driver seam:
+The SQL store is written once against a two-method seam:
 
 ```ts
 interface SqlDriver {
   dialect: SqlDialect;
   query<T>(sql: string, params: unknown[]): Promise<T[]>;
+  transaction?<T>(body: (tx: SqlDriver) => Promise<T>): Promise<T>;
   close(): Promise<void>;
 }
 ```
 
-So pg, better-sqlite3, libSQL, D1, Drizzle (`db.execute`) and Prisma (`$queryRawUnsafe`) are each a ~15-line binding, not a new adapter. Pass one with `sql(myDriver)`.
+So pg, better-sqlite3, libSQL, D1, Drizzle (`db.execute`) and Prisma (`$queryRawUnsafe`) are each a ~15-line binding rather than a new adapter. Pass one with `sql(myDriver)`.
 
 ### Who owns the schema
 
-hymem **declares** the schema; you **apply** it. Column names are an implementation detail — hand-writing them into your migration would make them public API, so the definition stays in the adapter and only the application path is yours:
+hymem **declares** the schema; you **apply** it. Column names are an implementation detail — hand-writing them into your migration would make them public API.
 
 ```ts
 postgres({ client: pool, migrate: "check" })  // default: verify, else throw with instructions
-postgres({ client: pool, migrate: "auto" })   // dev: create if absent
+postgres({ client: pool, migrate: "auto" })   // development: create if absent
 postgres({ client: pool, migrate: "off" })    // you ran the DDL yourself
 ```
 
-`"check"` is the default deliberately: it turns `relation "hymem_facts" does not exist` into an error that names the fix. `"auto"` is wrong for ORM users — it desyncs the database from your schema file, so your next `drizzle-kit generate` produces a bogus diff. Get the DDL for your own migration tool with:
+`"check"` is the default deliberately: it turns `relation "hymem_facts" does not exist` into an error that names the fix. `"auto"` is wrong for ORM users — it desyncs the database from your schema file, so your next `drizzle-kit generate` produces a bogus diff.
 
 ```bash
-npm run schema -- --dialect postgres          # or sqlite, and --prefix
+npx hymem schema --dialect postgres      # DDL for your own migration tool
 ```
 
-`tablePrefix` (default `hymem_`) keeps hymem clear of your own `facts` and `sessions` tables.
+`tablePrefix` (default `hymem_`) keeps hymem clear of your own tables.
 
-Writing your own adapter is implementing the ten methods and making `runStoreConformance` pass — 25 tests covering round-tripping, supersession, re-activation, idempotent re-ingest, ordering, limits, deletion semantics, concurrency, and tenant isolation. It needs no LLM and no API keys.
+### Writing your own adapter
+
+An adapter is ten methods and a passing conformance run — 28 tests covering round-tripping, supersession, re-activation, idempotent re-ingest, ordering, limits, deletion, concurrency, and tenant isolation. It needs no LLM and no API keys.
+
+```ts
+import { runStoreConformance } from "@hymem/core/testing";
+
+const result = await runStoreConformance(() => myStore());
+console.log(`${result.passed} passed, ${result.failed.length} failed`);
+```
 
 ### Supersession is one method, deliberately
 
-`supersede(incoming)` closes the facts a new one overwrites, records the chain, and returns the closed ids — in a single port call rather than find → close → link. Those three steps carry an invariant no caller-sequenced version can hold: between the find and the close, another writer can claim the same slot and both end up `active`. Keeping it inside the port lets each engine enforce it with what it has:
+`supersede(incoming)` closes the facts a new one overwrites, records the chain, and returns the closed ids — in a single port call rather than find → close → link. Those three steps carry an invariant no caller-sequenced version can hold: between the find and the close, another writer can claim the same slot and both end up active.
 
-| Store | How | `atomicSupersede` |
+Keeping it inside the port lets each engine enforce it with what it has — a data-modifying CTE on Postgres, a transaction on SQLite, `executeWrite` on Neo4j. Engines that *can't* say so via `capabilities.atomicSupersede`, and the conformance suite skips the concurrency test for them rather than letting it pass by accident.
+
+### What tenancy is not
+
+This is **application-level isolation, not database-level**. Facts carry a namespace column, every query filters on it, and conformance verifies that search, listing, supersession, deletion, and history all refuse to cross the boundary. But it is still hymem enforcing the rule in SQL it generates.
+
+If you need a guarantee that survives a bug in this library — regulated data, untrusted tenants — put Postgres row-level security underneath it, or give each tenant its own database.
+
+---
+
+## API
+
+### `createMemory(options)`
+
+| Option | Type | Notes |
 | --- | --- | --- |
-| Postgres | one data-modifying CTE (`WITH closed AS (UPDATE ... RETURNING) INSERT ...`) | yes |
-| SQLite | explicit transaction, serialised (one connection) | yes |
-| Neo4j / Memgraph | one managed write transaction (`executeWrite`) | yes |
-| In-memory | no `await` in the method body | yes |
-| HydraDB | separate round trips — no transaction in its Cypher subset | **no** |
+| `store` | `MemoryStore` | **Required.** Where facts live. |
+| `namespace` | `string` | **Required.** Tenant boundary; no default. |
+| `model` | `LanguageModel` | Fills extractor, planner and answerer with LLM-backed defaults. |
+| `speaker` | `string` | Default identity for the human, when one person owns this memory. |
+| `speakerToken` | `string` | Placeholder the extractor/planner use. Default `"user"`. |
+| `extractor` | `Extractor` | Transcript → facts. Override for rules-based or non-LLM extraction. |
+| `planner` | `QueryPlanner` | Question → lookup keys. |
+| `answerer` | `Answerer \| null` | Context → prose. `null` builds a recall-only memory. |
+| `maxFacts` | `number` | Upper bound on facts pulled into a recall. Default `24`. |
+| `abstainThreshold` | `number` | Abstain below this many supporting facts. Default `1`. |
 
-Stores that cannot make the guarantee say so, and the conformance suite skips the concurrency test for them rather than letting it pass by accident. A `pg.Pool` is required for the Postgres guarantee — issuing `BEGIN` through a pool is a bug, since each statement may land on a different connection, so the driver pins one via `connect()`.
+### `Memory`
 
-### How HydraDB is used
+| Method | Returns |
+| --- | --- |
+| `remember(session, prevSessionId?)` | `Fact[]` — extract and persist one session |
+| `rememberAll(sessions, onProgress?)` | `number` — ingest a history in chronological order |
+| `recall(question, { speaker }?)` | `{ facts, contextBlock, abstained, link }` |
+| `ask(question, { speaker }?)` | `{ answer, contextBlock, abstained }` |
+| `facts(entity?)` | `StoredFact[]` — everything stored, optionally by entity |
+| `forget(ids)` | delete facts by id |
+| `clear()` | wipe this namespace only |
+| `close()` | release the store's connections |
 
-Ingestion writes batched `UNWIND` Cypher over Bolt (node upserts, then edge merges between matched nodes); the supersession pass closes the old fact with `MATCH ... SET` and chains it with a batched `MERGE (new)-[:SUPERSEDES]->(old)`; recall is an entity-anchored traversal (`(:Fact)-[:ABOUT]->(:Entity {id})`). Reads are snapshot-consistent, and storage is object-store-native, so the memory survives process restarts and scales past RAM.
+`model` is sugar. Override any stage individually — a rules-based extractor for PII-sensitive domains, a custom prompt, or no answerer at all:
 
-HydraDB executes a deliberate **subset** of OpenCypher (see `cypher-compat.md` in the HydraDB repo), and every statement is written inside it. The rules that matter — integer node ids sent as Bolt INTs, node creation only via `UNWIND ... MERGE ... SET`, no `MATCH ... MERGE`, no `IN`/`coalesce()`, no label-less `MATCH (n)` — are captured as a `Dialect` in [`src/stores/cypher/dialect.ts`](src/stores/cypher/dialect.ts), which is also what lets Neo4j and Memgraph share one implementation. The integer-id mapping is private to the adapter: the rest of hymem only ever sees a fact's string hash. `neo4j-driver` is pinned to `~5.27`: from 5.28 the JS driver uses the Bolt manifest handshake, which HydraDB's server answers in several TCP writes and the driver reads as one — a coin-flip connection failure that [`src/stores/cypher/driver.ts`](src/stores/cypher/driver.ts) also retries around as a backstop.
+```ts
+createMemory({
+  store: memoryStore(),
+  namespace: "demo",
+  extractor: myRulesExtractor,   // no LLM on the write path
+  planner: llmPlanner(model),
+  answerer: null,                // recall-only; ask() throws
+});
+```
 
-## Quick start
+The pure algorithms are exported too, and import nothing — `ingestSession`, `recall`, `formatContext`, `factId`, `canonEntity`.
+
+---
+
+## CLI
 
 ```bash
-# 1. Build & run a local HydraDB node (Rust 1.91+, libcypher-parser, GraphBLAS — see the HydraDB README)
-git clone https://github.com/hydra-db/hydradb.git ~/hydradb
-HYDRADB_REPO=~/hydradb bash scripts/run-hydra.sh   # runs in the foreground
-
-# 2. In another shell: install, configure, verify
-npm install
-cp .env.example .env    # set LLM_API_KEY (any OpenAI-compatible endpoint)
-npm run bootstrap       # round-trips a write through the node
-
-# 3. Use it
-npm run ingest -- examples/sessions.json
-npm run ask -- "Where does the user live now?"
-npm run ask -- "Where did the user live before that?"
-npm run inspect -- user
-
-# 4. Benchmark (LongMemEval)
-npm run eval -- path/to/longmemeval_s.json 50
+npm install -g @hymem/cli
 ```
 
-### MCP server (Claude Code and friends)
+```bash
+export MEM_NAMESPACE=local
+export MEM_STORE=sqlite SQLITE_PATH=memory.db MEM_MIGRATE=auto
+export LLM_API_KEY=...            # any OpenAI-compatible endpoint
+
+hymem ingest sessions.json         # extract and store facts
+hymem ask "where do I live?"       # recall, then answer
+hymem recall "..."                 # raw facts, no LLM synthesis
+hymem inspect [entity]             # browse what is stored
+hymem forget <ids...>              # delete by id
+hymem wipe                         # empty the configured namespace
+hymem conformance                  # verify the configured store
+hymem schema --dialect postgres    # print DDL
+```
+
+`hymem schema` and `hymem conformance` need neither a namespace nor a database.
+
+### MCP server
+
+Gives Claude Code — or any MCP client — persistent cross-session memory.
 
 ```json
-{
-  "mcpServers": {
-    "hymem": {
-      "command": "npx",
-      "args": ["tsx", "/path/to/hymem/src/mcp-server.ts"],
-      "env": { "LLM_API_KEY": "..." }
-    }
-  }
-}
+{ "mcpServers": { "hymem": { "command": "npx", "args": ["-y", "@hymem/cli", "hymem-mcp"] } } }
 ```
 
-Tools: `memory_save`, `memory_recall`, `memory_list`, `memory_forget`. Tool descriptions instruct the agent to recall before answering history questions and to save durable facts — no custom protocol to learn.
+Tools: `memory_save`, `memory_recall`, `memory_list`, `memory_forget`.
+
+### Configuration
+
+| Variable | Purpose |
+| --- | --- |
+| `MEM_NAMESPACE` | **Required.** Tenant boundary. |
+| `MEM_STORE` | `sqlite` (default), `postgres`, `neo4j`, `memgraph`, `hydradb`, `memory` |
+| `MEM_SPEAKER` | Identity of the human, for shared namespaces |
+| `MEM_MAX_FACTS`, `MEM_ABSTAIN_THRESHOLD` | Recall behaviour |
+| `MEM_MIGRATE`, `MEM_TABLE_PREFIX` | SQL schema handling |
+| `DATABASE_URL` / `SQLITE_PATH` | SQL connection |
+| `HYDRA_BOLT_URL`, `HYDRA_TOKEN` / `BOLT_USER`, `BOLT_PASSWORD` | Graph connection |
+| `LLM_PROVIDER`, `LLM_MODEL`, `LLM_API_KEY`, `LLM_BASE_URL` | Model selection |
+
+`LLM_PROVIDER` accepts `openai`, `anthropic`, `google`, or `openai-compatible` — the last, with `LLM_BASE_URL`, covers OpenRouter, Groq, Ollama, LM Studio, vLLM, and DashScope.
+
+---
 
 ## Architecture
 
@@ -214,158 +334,58 @@ sessions ──▶ extract ──▶ facts              question              �
                                    │ MemoryStore port              │
               ┌────────────────────┼────────────────────┐          │
               ▼                    ▼                    ▼          │
-        in-memory            HydraDB / Neo4j        your adapter    │
+        in-memory            Postgres / SQLite     graph stores     │
                                                                     │
                     0 facts → structural abstention ────────────────┤
                                                                     ▼
                                               grounded, supersession-annotated answer
 ```
 
-Four ports, all replaceable: `MemoryStore` (where facts live), `Extractor` (transcript → facts), `QueryPlanner` (question → lookup keys), `Answerer` (context → prose, and omittable — agent authors usually want `recall()` and their own prompt).
+Four ports, all replaceable: `MemoryStore` (where facts live), `Extractor` (transcript → facts), `QueryPlanner` (question → lookup keys), and `Answerer` (context → prose, omittable).
 
-## Repo layout
+## Packages
 
+| Package | Contents |
+| --- | --- |
+| [`@hymem/core`](packages/core) | ports, algorithms, in-memory store, SQL and Cypher store logic, conformance suite |
+| [`@hymem/postgres`](packages/postgres) | `pg` driver + `postgres()` |
+| [`@hymem/sqlite`](packages/sqlite) | `node:sqlite` driver + `sqlite()` |
+| [`@hymem/bolt`](packages/bolt) | Bolt driver + `neo4jStore()` / `memgraph()` / `hydradb()` |
+| [`@hymem/tidb`](packages/tidb) | TiDB Cloud serverless + mysql2 drivers |
+| [`@hymem/d1`](packages/d1) | Cloudflare D1 driver, for Workers |
+| [`@hymem/cli`](packages/cli) | CLI, MCP server, environment wiring, eval harness |
+
+## Developing this repo
+
+```bash
+npm install          # workspace install
+npm run build        # tsc --build across all packages
+npm run check        # typecheck + every suite that needs no services
+
+npm run conformance sqlite      # real SQL, no services
+npm run conformance postgres    # DATABASE_URL=...
+npm run conformance neo4j       # NEO4J_URL=... (default bolt://127.0.0.1:7688)
+npm run conformance hydradb     # HYDRA_BOLT_URL=...
+npm run conformance tidb        # TIDB_URL=... (defaults to mysql://root@127.0.0.1:4000/test)
+npm run conformance d1          # no services — Miniflare provides a local D1
 ```
-packages/core/     hymem            core, ports, algorithms, in-memory store,
-                                    the pure SQL and Cypher stores, conformance
-packages/postgres/ @hymem/postgres  pg driver + postgres()
-packages/sqlite/   @hymem/sqlite    node:sqlite driver + sqlite()
-packages/bolt/     @hymem/bolt      Bolt driver + hydradb()/neo4jStore()/memgraph()
-packages/cli/      @hymem/cli       CLI, MCP server, env wiring, eval harness
 
-packages/core/src/core/types.ts        domain types — no engine, no I/O
-packages/core/src/core/ports.ts        MemoryStore, Extractor, QueryPlanner, Answerer
-packages/core/src/core/ingest.ts       session writes + supersession pass (engine-agnostic)
-packages/core/src/core/recall.ts       temporal filtering, context formatting (engine-agnostic)
-packages/core/src/core/memory.ts       createMemory() — the public API
-packages/core/src/core/ids.ts          fact identity + entity canonicalisation
-packages/core/src/stores/memory-store.ts  zero-dependency reference store
-packages/core/src/stores/cypher/       Bolt driver, dialects, MemoryStore over a property graph
-packages/core/src/stores/sql/          SQL driver seam, dialects, schema ownership, MemoryStore over tables
-packages/core/src/llm/                 LLM-backed extractor / planner / answerer + JSON repair
-packages/core/src/testing/conformance.ts  the executable MemoryStore contract
-packages/cli/src/env.ts                the only module that reads process.env (CLI/MCP/eval)
-packages/cli/src/cli.ts                ingest | ask | recall | inspect | forget | conformance
-packages/cli/src/mcp-server.ts         MCP tools: save / recall / list / forget
-packages/cli/src/eval.ts               LongMemEval harness
+The benchmark harness ([LongMemEval](https://github.com/xiaowu0162/LongMemEval)) lives in the CLI package:
+
+```bash
+npm run -w @hymem/cli eval -- path/to/longmemeval_s.json 50
 ```
 
-## Known adjustments on first run
+## Status
 
-- **Bolt auth scheme** (`src/hydra.ts`): try `neo4j.auth.bearer(token)` first, then `basic("", token)`; mirror what `scripts/runtime_smoke.sh` in the HydraDB repo does.
-- **HTTP response shape** (`src/hydra.ts` fallback): confirm the rows field name against a live node.
-- The node **must** run with `RUST_MIN_STACK=33554432` (handled by `scripts/run-hydra.sh`).
+Early. The memory model, tenancy, and the adapter contract are settled and verified across seven engines. Known gaps:
 
-## Attributions
-
-- [HydraDB](https://github.com/hydra-db/hydradb) (AGPL-3.0) — graph storage and query engine (run as an external server; not linked or modified).
-- [LongMemEval](https://github.com/xiaowu0162/LongMemEval) — benchmark dataset.
-- [neo4j-driver](https://www.npmjs.com/package/neo4j-driver) — Bolt connectivity.
-- [@modelcontextprotocol/sdk](https://www.npmjs.com/package/@modelcontextprotocol/sdk) — MCP server.
-- LLM calls via an OpenAI-compatible API (configurable).
-- Portions of this scaffold were drafted with an AI coding assistant during the hackathon window.
+- **Session/thread querying.** Facts record their source session, but you can't yet filter a recall by session or list sessions.
+- **No vector search.** Recall is entity-anchored, widened by declared aliases. `capabilities.vectorSearch` exists for adapters that add embedding-backed candidate generation on top.
+- **HydraDB is not atomic** for concurrent supersession — see [`@hymem/bolt`](packages/bolt).
 
 ## License
 
-Apache-2.0 (this project's code). HydraDB itself is AGPL-3.0 and is used unmodified as an external service.
+Apache-2.0. See [LICENSE](LICENSE).
 
-## Choosing an LLM provider
-
-hymem uses the Vercel AI SDK, so any provider works via env vars — no code changes:
-
-| Provider | .env |
-|---|---|
-| OpenAI | `LLM_PROVIDER=openai` `LLM_MODEL=gpt-4o-mini` |
-| Anthropic | `LLM_PROVIDER=anthropic` `LLM_MODEL=claude-sonnet-4-5` |
-| Google | `LLM_PROVIDER=google` `LLM_MODEL=gemini-2.0-flash` |
-| OpenRouter / Groq / Ollama / vLLM / LM Studio | `LLM_PROVIDER=openai-compatible` `LLM_BASE_URL=...` `LLM_MODEL=...` |
-
-Structured extraction uses `generateObject` with zod schemas, so fact JSON is validated by the SDK — no hand-rolled parsing.
-
-## Using hymem as a library
-
-Everything is injected — no globals, no environment reads, no bundled LLM provider. Two memories with different stores can coexist in one process.
-
-```ts
-import { createMemory } from "hymem";
-import { hydradb } from "@hymem/bolt";
-import { openai } from "@ai-sdk/openai";
-
-const memory = createMemory({
-  store: hydradb({ url: "bolt://127.0.0.1:7687", token: process.env.HYDRA_TOKEN }),
-  model: openai("gpt-4o-mini"),
-  namespace: `usr_${userId}`,   // required — the tenant boundary
-  abstainThreshold: 1,
-  maxFacts: 24,
-});
-
-await memory.rememberAll(sessions);
-
-const recalled = await memory.recall("Where does the user live now?");
-if (!recalled.abstained) console.log(recalled.contextBlock);
-```
-
-`model` is sugar: it fills the extractor, planner, and answerer with LLM-backed defaults. Override any one of them — a rules-based extractor for PII-sensitive domains, a custom prompt, or no answerer at all:
-
-```ts
-const memory = createMemory({
-  store: memoryStore(),
-  extractor: myRulesExtractor,   // no LLM on the write path
-  planner: llmPlanner(model),
-  answerer: null,                // recall-only; ask() throws
-});
-```
-
-### Writing a store adapter
-
-```ts
-import { runStoreConformance } from "hymem/testing";
-
-const result = await runStoreConformance(() => myStore());
-console.log(`${result.passed} passed, ${result.failed.length} failed`);
-```
-
-## Publishing to npm
-
-```bash
-npm login
-npm run typecheck && npm run build   # also runs automatically via prepublishOnly
-npm pack --dry-run                    # verify only dist/, README, LICENSE ship
-npm publish --access public
-```
-
-After publishing, the two binaries work anywhere:
-
-```bash
-npx hymem inspect user
-npx hymem-mcp        # MCP config: { "command": "npx", "args": ["-y", "hymem-mcp"] }
-```
-
-## Production hardening checklist (post-hackathon)
-
-- **Reliability:** retries with backoff + timeouts on LLM and Bolt calls; health endpoint; graceful shutdown.
-- **Correctness:** unit tests (vitest) for supersession and temporal filtering; an idempotency test (re-ingesting the same session must not duplicate); a small golden-question regression suite wired into CI.
-- **Concurrency:** serialize the supersession pass per (subject, attribute) — two parallel ingests can race; a queue or per-key lock fixes it.
-- **Multi-tenancy:** one HydraDB namespace/graph per user or team; never mix tenants in one graph.
-- **Security:** real token management (no default token), TLS to the node (drop GRAPH_ALLOW_PLAINTEXT), PII redaction option before facts are stored, authz on MCP tools.
-- **Observability:** structured logging (pino), latency/error metrics per pipeline stage, trace ids from question → facts → answer.
-- **Data ops:** export/erase-per-user commands (GDPR), TTL sweep for stale episodic facts, periodic consolidation job.
-- **Retrieval quality:** add embedding-based entity aliasing and a hybrid rerank as a fallback when entity linking misses; index Entity.name and Fact.id in HydraDB if/when index DDL is available.
-- **Packaging:** CI (GitHub Actions: typecheck, build, tests), changesets for versioning, provenance-signed npm publish.
-
-## Cross-platform notes (Linux / macOS / Windows)
-
-**Env vars.** `config.ts` loads `.env` from the working directory with Node's built-in `process.loadEnvFile()` — no `source`, no `export`, no `set`, no extra dependency. The same `.env` file works in bash, PowerShell, and cmd. Variables already set in the shell/CI/Docker take precedence over the file. Requires Node >= 20.12.
-
-**The TypeScript side is fully portable.** `npm run …`, the CLI, and the MCP server run natively on all three OSes; npm generates `.cmd` shims for the `hymem` and `hymem-mcp` binaries on Windows automatically. No npm script sets env vars inline, so `cross-env` isn't needed.
-
-**The HydraDB node itself** is where platforms differ, because the Rust engine needs libcypher-parser and SuiteSparse:GraphBLAS:
-
-| Platform | Recommended way to run the node |
-|---|---|
-| Linux / macOS | `HYDRADB_REPO=~/hydradb bash scripts/run-hydra.sh` |
-| Windows (best) | Docker Desktop: `docker compose up --build` — the container is Linux, so the build is identical everywhere |
-| Windows (alt) | WSL2: run `scripts/run-hydra.sh` inside Ubuntu; ports are reachable from Windows at 127.0.0.1 |
-| Windows (native) | `scripts/run-hydra.ps1` — only if you can source the native C dependencies; not recommended under deadline |
-
-`.gitattributes` pins `.sh` files to LF so the bash script isn't broken by CRLF checkouts on Windows.
+Built on [neo4j-driver](https://www.npmjs.com/package/neo4j-driver) for Bolt connectivity, [@modelcontextprotocol/sdk](https://www.npmjs.com/package/@modelcontextprotocol/sdk) for the MCP server, and the [AI SDK](https://sdk.vercel.ai) for model access.

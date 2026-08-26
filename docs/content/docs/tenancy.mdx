@@ -1,0 +1,147 @@
+---
+title: Tenancy and speakers
+description: Namespaces, shared org memory, and why identity never comes from the model.
+---
+
+## Namespaces
+
+`namespace` is **required with no default**. An accidentally shared namespace is
+a data leak, so it has to be a decision rather than an omission.
+
+```ts
+createMemory({ store, model, namespace: `usr_${userId}` })   // personal memory
+createMemory({ store, model, namespace: `org_${orgId}` })    // shared team memory
+```
+
+One store serves every tenant. The namespace travels with each call rather than
+being baked into the store, so a thousand tenants share one connection pool
+instead of needing one each.
+
+## Sharing memory inside an organisation
+
+A shared namespace needs one more thing, or it silently corrupts data.
+
+Extraction canonicalises whoever is talking to `"user"`. Without an identity,
+Alice and Bob produce the **same fact id** — and Bob moving to Denver would mark
+Alice's home city superseded.
+
+```ts
+await memory.remember({ ...session, speaker: "usr_alice" });
+await memory.remember({ ...session, speaker: "usr_bob" });
+
+await memory.recall("where do I live?", { speaker: "usr_alice" });
+```
+
+`speaker` is an opaque string **you** supply — hymem never generates one, because
+your auth system already has a stable id.
+
+<Callout type="warn" title="Identity never comes from the model">
+Asking an LLM to name the speaker returns `alice`, `Alice`, and `alice smith`
+across three sessions. The extractor emits a fixed placeholder and core rewrites
+it deterministically, so no custom extractor can get identity wrong.
+</Callout>
+
+**One person per namespace needs no speaker** — the namespace is already the
+identity, and the placeholder stays literal.
+
+## Opaque ids and display names
+
+Using `usr_7f3a91` rather than `alice` survives renames and stops two people
+named Alice colliding. The catch: a question naming "Bob" plans a lookup for the
+string `bob`, which never matches `usr_bob123`.
+
+Pass `speakerName` and hymem links both — the id stays the identity, the name
+becomes a working alias:
+
+```ts
+await memory.remember({ ...session, speaker: "usr_7f3a91", speakerName: "bob" });
+```
+
+## The `"user"` token
+
+`"user"` does double duty: the placeholder for the speaker, and a word people
+genuinely use. *"The user clicked export and it crashed"* is about a product's
+end user — but with `speaker` set it would be rewritten into a fact about the
+speaker.
+
+The substitution only runs when `speaker` is set, so single-speaker namespaces
+are never exposed. If your domain talks about users literally, change the token:
+
+```ts
+createMemory({ store, model, namespace, speakerToken: "__self__" })
+```
+
+Custom extractors must emit whatever token you configure.
+
+## Aliases
+
+People do not use the same name twice. A fact is stored under `sarah`, and the
+question arrives as *"where does my wife live?"* — the planner emits `wife`, the
+lookup misses, and a memory that holds the answer abstains.
+
+When a session explicitly links the two — *"my wife Sarah just started a new
+job"* — the extractor records it, and core stores the alias as an **extra entity
+link** on that fact:
+
+```
+sarah | job_title = flight scheduler | entities: sarah, delta, alias:wife
+```
+
+Both names now reach the fact. Nothing is hidden: the alias shows up in
+`hymem inspect`, it is exact-match, and it can be deleted like any other link.
+
+```
+"Where does my wife work?"   → Sarah works at Delta as a flight scheduler.
+"Where does my brother work?" → I don't know based on the conversation history.
+```
+
+That second line is the point. Aliases widen recall **without** weakening
+abstention, because matching stays exact — an alias exists only where a session
+declared it. A similarity index would have scored "brother" against "wife" and
+returned something.
+
+### Scoping
+
+Relational aliases are only true relative to whoever said them. In a shared
+namespace Alice's "wife" and Bob's "wife" are different people, so aliases are
+scoped to the speaker when one is set:
+
+```
+alias:alice/wife → sarah
+alias:bob/wife   → dana
+```
+
+With no speaker the namespace already identifies one person, and the bare
+`alias:wife` form is used.
+
+### Guardrails
+
+- An alias whose target is not among the fact's own entities is **dropped** — a
+  model that invents a mapping cannot attach it to an unrelated fact.
+- Aliases never cross a namespace.
+- The extractor is told to record only links the text actually states, never to
+  guess a relationship.
+
+### Why not embeddings
+
+Vectors would help here too, but they would cost more than they return. They
+cannot express a validity interval, so they say nothing about supersession; and
+similarity always returns *something*, so the structural abstention that makes
+this library trustworthy would need a score threshold instead — exactly the
+brittle heuristic it exists to avoid.
+
+`capabilities.vectorSearch` is in the port for adapters that want to add
+embedding-backed candidate generation on top. It would feed the same temporal
+filter, never replace it.
+
+## What tenancy is not
+
+This is **application-level isolation, not database-level**. Facts carry a
+namespace column, every query filters on it, and the conformance suite verifies
+that search, listing, supersession, deletion, and history all refuse to cross the
+boundary.
+
+But it is still hymem enforcing the rule in SQL it generates. If you need a
+guarantee that survives a bug in this library — regulated data, untrusted tenants
+— put Postgres row-level security underneath it, or give each tenant its own
+database.

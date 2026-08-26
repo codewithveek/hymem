@@ -82,6 +82,7 @@ export function sqlStore(options: SqlStoreOptions): MemoryStore {
   }
 
   let schemaReady: Promise<void> | undefined;
+  let closing: Promise<void> | undefined;
 
   async function ensureSchema(): Promise<void> {
     if (migrate === "off") return;
@@ -93,10 +94,16 @@ export function sqlStore(options: SqlStoreOptions): MemoryStore {
         return;
       }
       // "check": a probe select is dialect-free, unlike information_schema.
-      try {
-        await driver.query(`SELECT 1 FROM ${tables.facts} LIMIT 1`, []);
-      } catch {
-        throw new MissingSchemaError(tables.facts, dialect.name, prefix);
+      // Every table is probed, not just `facts`: a half-applied schema that
+      // passed here would surface later as a raw driver error from whichever
+      // query first touched the missing table, instead of MissingSchemaError
+      // and its instructions.
+      for (const tableName of Object.values(tables)) {
+        try {
+          await driver.query(`SELECT 1 FROM ${tableName} LIMIT 1`, []);
+        } catch {
+          throw new MissingSchemaError(tableName, dialect.name, prefix);
+        }
       }
     })();
     await schemaReady;
@@ -145,6 +152,8 @@ export function sqlStore(options: SqlStoreOptions): MemoryStore {
   const ascending = (earlier: StoredFact, later: StoredFact) =>
     earlier.observedAt.localeCompare(later.observedAt);
 
+  const parameterCap = () => options.maxParameters ?? dialect.maxParameters;
+
   /**
    * Split a list-valued predicate into statements that stay under the dialect's
    * bind-parameter cap. `listFacts` over a large namespace and `deleteFacts`
@@ -154,13 +163,40 @@ export function sqlStore(options: SqlStoreOptions): MemoryStore {
    * `reserved` leaves room for the other parameters in the same statement.
    */
   function chunked<T>(items: readonly T[], reserved = 4): T[][] {
-    const size = Math.max(1, (options.maxParameters ?? dialect.maxParameters) - reserved);
-    if (items.length <= size) return [items as T[]];
+    return chunkedTo(items, parameterCap() - reserved);
+  }
+
+  /** `chunked`, for callers that have already worked out their own budget. */
+  function chunkedTo<T>(items: readonly T[], size: number): T[][] {
+    const step = Math.max(1, size);
+    if (items.length <= step) return [items as T[]];
     const batches: T[][] = [];
-    for (let start = 0; start < items.length; start += size) {
-      batches.push(items.slice(start, start + size) as T[]);
+    for (let start = 0; start < items.length; start += step) {
+      batches.push(items.slice(start, start + step) as T[]);
     }
     return batches;
+  }
+
+  /**
+   * The subset of `factIds` this namespace actually owns.
+   *
+   * Fact ids embed the namespace, so a caller can only produce a foreign one by
+   * having seen it — but "unreachable unless leaked" is not a boundary. Every
+   * write keyed by a caller-supplied id is narrowed through here first.
+   */
+  async function ownedFactIds(namespace: string, factIds: readonly string[]): Promise<Set<string>> {
+    const owned = new Set<string>();
+    if (factIds.length === 0) return owned; // `id IN ()` is not valid SQL
+    for (const batch of chunked(factIds)) {
+      const binder = newBinder();
+      const rows = await driver.query<{ id: string }>(
+        `SELECT id FROM ${tables.facts}
+         WHERE namespace = ${binder.bind(namespace)} AND id IN (${binder.list(batch)})`,
+        binder.values,
+      );
+      for (const row of rows) owned.add(row.id);
+    }
+    return owned;
   }
 
   return {
@@ -177,15 +213,14 @@ export function sqlStore(options: SqlStoreOptions): MemoryStore {
         binder.bind(previousSessionId ?? null),
         binder.bind(session.speaker ?? null),
       ].join(", ");
+      const session_shape = dialect.upsert(
+        ["namespace", "id"],
+        [{ column: "ts" }, { column: "session_index" }, { column: "previous_session_id" }, { column: "speaker" }],
+      );
       await driver.query(
-        `INSERT INTO ${tables.sessions} (namespace, id, ts, session_index, previous_session_id, speaker)
+        `${session_shape.prefix} ${tables.sessions} (namespace, id, ts, session_index, previous_session_id, speaker)
          VALUES (${values})
-         ${dialect.upsert(["namespace", "id"], [
-           "ts = excluded.ts",
-           "session_index = excluded.session_index",
-           "previous_session_id = excluded.previous_session_id",
-           "speaker = excluded.speaker",
-         ])}`,
+         ${session_shape.tail}`,
         binder.values,
       );
     },
@@ -210,22 +245,25 @@ export function sqlStore(options: SqlStoreOptions): MemoryStore {
         // Re-activation is the whole point of the DO UPDATE: a fact restated
         // after being superseded goes back to active, validFrom is refreshed,
         // and validTo is cleared.
+        const fact_shape = dialect.upsert(["id"], [
+          { column: "namespace" },
+          { column: "subject" },
+          { column: "attribute" },
+          { column: "value" },
+          { column: "fact_text" },
+          { column: "observed_at" },
+          { column: "session_id" },
+          // Literals, not incoming values: a fact restated after being
+          // superseded must go back to active with an open interval.
+          { column: "status", literal: "'active'" },
+          { column: "valid_from" },
+          { column: "valid_to", literal: "NULL" },
+        ]);
         await driver.query(
-          `INSERT INTO ${tables.facts}
+          `${fact_shape.prefix} ${tables.facts}
              (id, namespace, subject, attribute, value, fact_text, observed_at, session_id, status, valid_from, valid_to)
            VALUES (${values}, NULL)
-           ${dialect.upsert(["id"], [
-             "namespace = excluded.namespace",
-             "subject = excluded.subject",
-             "attribute = excluded.attribute",
-             "value = excluded.value",
-             "fact_text = excluded.fact_text",
-             "observed_at = excluded.observed_at",
-             "session_id = excluded.session_id",
-             "status = 'active'",
-             "valid_from = excluded.valid_from",
-             "valid_to = NULL",
-           ])}`,
+           ${fact_shape.tail}`,
           binder.values,
         );
       }
@@ -234,16 +272,23 @@ export function sqlStore(options: SqlStoreOptions): MemoryStore {
     async linkEntities(namespace: string, links) {
       await ensureSchema();
       if (links.length === 0) return;
+      // A link row stores the caller's namespace beside a fact id it does not
+      // verify. Unchecked, one tenant could index another tenant's fact under
+      // an entity of its choosing and change what that tenant's own search
+      // returns. Unknown and foreign ids are skipped, as in deleteFacts.
+      const owned = await ownedFactIds(namespace, [...new Set(links.map((link) => link.factId))]);
       for (const link of links) {
+        if (!owned.has(link.factId)) continue;
         const binder = newBinder();
         const values = [
           binder.bind(namespace),
           binder.bind(link.factId),
           binder.bind(link.entity),
         ].join(", ");
+        const link_shape = dialect.insertIgnore(["fact_id", "entity"]);
         await driver.query(
-          `INSERT INTO ${tables.factEntities} (namespace, fact_id, entity) VALUES (${values})
-           ${dialect.insertIgnore(["fact_id", "entity"])}`,
+          `${link_shape.prefix} ${tables.factEntities} (namespace, fact_id, entity) VALUES (${values})
+           ${link_shape.tail}`,
           binder.values,
         );
       }
@@ -252,81 +297,145 @@ export function sqlStore(options: SqlStoreOptions): MemoryStore {
     async supersede(incoming: StoredFact) {
       await ensureSchema();
 
-      /** The predicate selecting facts `incoming` overwrites. */
-      const closeClause = (binder: ReturnType<typeof newBinder>) =>
-        `UPDATE ${tables.facts}
-            SET status = 'superseded', valid_to = ${binder.bind(incoming.observedAt)}
-          WHERE namespace = ${binder.bind(incoming.namespace)}
+      /** Predicate selecting the active facts `incoming` overwrites. */
+      const whereSupersedable = (binder: ReturnType<typeof newBinder>) =>
+        `namespace = ${binder.bind(incoming.namespace)}
             AND status = 'active'
             AND id <> ${binder.bind(incoming.id)}
             AND subject = ${binder.bind(incoming.subject)}
             AND attribute = ${binder.bind(incoming.attribute)}
             AND value <> ${binder.bind(incoming.value)}
-            AND observed_at < ${binder.bind(incoming.observedAt)}
-          RETURNING id`;
+            AND observed_at < ${binder.bind(incoming.observedAt)}`;
+
+      const closeStatement = (binder: ReturnType<typeof newBinder>) =>
+        `UPDATE ${tables.facts}
+            SET status = 'superseded', valid_to = ${binder.bind(incoming.observedAt)}
+          WHERE ${whereSupersedable(binder)}`;
+
+      const linkStatement = (session: SqlDriver, supersededId: string) => {
+        const binder = newBinder();
+        const values = [binder.bind(incoming.id), binder.bind(supersededId)].join(", ");
+        const shape = dialect.insertIgnore(["new_fact_id", "old_fact_id"]);
+        return session.query(
+          `${shape.prefix} ${tables.supersedes} (new_fact_id, old_fact_id) VALUES (${values})
+           ${shape.tail}`,
+          binder.values,
+        );
+      };
 
       // Postgres: close and chain in ONE statement. A data-modifying CTE makes
-      // the whole thing a single atomic unit with no window for a second writer.
-      if (dialect.dataModifyingCte) {
+      // the whole thing atomic with no window for a second writer.
+      if (dialect.dataModifyingCte && dialect.returning) {
         const binder = newBinder();
-        const closed = closeClause(binder);
+        const shape = dialect.insertIgnore(["new_fact_id", "old_fact_id"]);
         const rows = await driver.query<{ old_fact_id: string }>(
-          `WITH closed AS (${closed})
-           INSERT INTO ${tables.supersedes} (new_fact_id, old_fact_id)
+          `WITH closed AS (${closeStatement(binder)} RETURNING id)
+           ${shape.prefix} ${tables.supersedes} (new_fact_id, old_fact_id)
            SELECT ${binder.bind(incoming.id)}, id FROM closed
-           ${dialect.insertIgnore(["new_fact_id", "old_fact_id"])}
+           ${shape.tail}
            RETURNING old_fact_id`,
           binder.values,
         );
         return rows.map((row) => row.old_fact_id);
       }
 
-      // SQLite and friends: two statements, wrapped so they still commit as one.
-      const run = async (transactional: SqlDriver): Promise<string[]> => {
-        const closeBinder = newBinder();
-        const closedRows = await transactional.query<{ id: string }>(
-          closeClause(closeBinder),
-          closeBinder.values,
+      // SQLite: UPDATE ... RETURNING gives the ids back, then the chain rows
+      // follow inside the same transaction.
+      if (dialect.returning) {
+        const run = async (session: SqlDriver): Promise<string[]> => {
+          const binder = newBinder();
+          const closedRows = await session.query<{ id: string }>(
+            `${closeStatement(binder)} RETURNING id`,
+            binder.values,
+          );
+          const supersededIds = closedRows.map((row) => row.id);
+          for (const supersededId of supersededIds) await linkStatement(session, supersededId);
+          return supersededIds;
+        };
+        return driver.transaction ? driver.transaction(run) : run(driver);
+      }
+
+      // MySQL and TiDB have no RETURNING at all, so the doomed ids must be read
+      // before they are closed. That read-then-write is exactly the race the
+      // transaction exists to close; without one the store reports
+      // atomicSupersede: false rather than pretending.
+      const run = async (session: SqlDriver): Promise<string[]> => {
+        const selectBinder = newBinder();
+        const doomed = await session.query<{ id: string }>(
+          `SELECT id FROM ${tables.facts} WHERE ${whereSupersedable(selectBinder)}`,
+          selectBinder.values,
         );
-        const supersededIds = closedRows.map((row) => row.id);
-        for (const supersededId of supersededIds) {
-          const linkBinder = newBinder();
-          const values = [linkBinder.bind(incoming.id), linkBinder.bind(supersededId)].join(", ");
-          await transactional.query(
-            `INSERT INTO ${tables.supersedes} (new_fact_id, old_fact_id) VALUES (${values})
-             ${dialect.insertIgnore(["new_fact_id", "old_fact_id"])}`,
-            linkBinder.values,
+        const supersededIds = doomed.map((row) => row.id);
+        if (supersededIds.length === 0) return [];
+
+        for (const batch of chunked(supersededIds, 2)) {
+          const updateBinder = newBinder();
+          const validTo = updateBinder.bind(incoming.observedAt);
+          const idList = updateBinder.list(batch);
+          await session.query(
+            `UPDATE ${tables.facts}
+                SET status = 'superseded', valid_to = ${validTo}
+              WHERE id IN (${idList})`,
+            updateBinder.values,
           );
         }
+        for (const supersededId of supersededIds) await linkStatement(session, supersededId);
         return supersededIds;
       };
-
       return driver.transaction ? driver.transaction(run) : run(driver);
     },
 
     async search(query: SearchQuery) {
       await ensureSchema();
-      if (query.entities.length === 0) return [];
-      const binder = newBinder();
-      const namespaceParam = binder.bind(query.namespace);
-      const entityList = binder.list(query.entities);
+      const limit = Math.floor(query.limit);
+      // `limit` is an upper bound, so zero means zero: the reference store
+      // returns nothing here and this one has to agree.
+      if (query.entities.length === 0 || !Number.isFinite(limit) || limit <= 0) return [];
       const attributes = query.attributes ?? [];
-      const attributeFilter = attributes.length
-        ? `AND facts.attribute IN (${binder.list(attributes)})`
-        : "";
-      const limit = Math.max(1, Math.floor(query.limit));
-      // DESC keeps the NEWEST matches; the result is re-sorted ascending.
-      const rows = await driver.query<FactRow>(
-        `SELECT DISTINCT ${FACT_COLUMNS.split(", ").map((column) => `facts.${column}`).join(", ")}
-         FROM ${tables.facts} facts
-         JOIN ${tables.factEntities} links ON links.fact_id = facts.id
-         WHERE facts.namespace = ${namespaceParam}
-           AND links.entity IN (${entityList}) ${attributeFilter}
-         ORDER BY facts.observed_at DESC
-         LIMIT ${limit}`,
-        binder.values,
-      );
-      return (await withEntities(query.namespace, rows)).sort(ascending);
+
+      // Both lists are caller-sized and both bind one parameter per item, so a
+      // large query needs splitting exactly as listFacts and deleteFacts do.
+      // Every chunk is a relaxation of the same query, so the union of their
+      // rows holds every match, and the newest `limit` of that union is what a
+      // single unsplittable statement would have returned.
+      const budget = Math.max(2, parameterCap() - 2); // room for the namespace
+      const attributeBatches = attributes.length
+        ? chunkedTo(attributes, Math.floor(budget / 2))
+        : [[] as string[]];
+      const widestAttributeBatch = Math.max(...attributeBatches.map((batch) => batch.length));
+      const entityBatches = chunkedTo(query.entities, budget - widestAttributeBatch);
+
+      const rowsById = new Map<string, FactRow>();
+      for (const entityBatch of entityBatches) {
+        for (const attributeBatch of attributeBatches) {
+          const binder = newBinder();
+          const namespaceParam = binder.bind(query.namespace);
+          const entityList = binder.list(entityBatch);
+          const attributeFilter = attributeBatch.length
+            ? `AND facts.attribute IN (${binder.list(attributeBatch)})`
+            : "";
+          // DESC keeps the NEWEST matches; the result is re-sorted ascending.
+          // The join carries the namespace as well: a link row only ever speaks
+          // for a fact in its own tenant.
+          const rows = await driver.query<FactRow>(
+            `SELECT DISTINCT ${FACT_COLUMNS.split(", ").map((column) => `facts.${column}`).join(", ")}
+             FROM ${tables.facts} facts
+             JOIN ${tables.factEntities} links
+               ON links.fact_id = facts.id AND links.namespace = facts.namespace
+             WHERE facts.namespace = ${namespaceParam}
+               AND links.entity IN (${entityList}) ${attributeFilter}
+             ORDER BY facts.observed_at DESC
+             LIMIT ${limit}`,
+            binder.values,
+          );
+          for (const row of rows) rowsById.set(row.id, row);
+        }
+      }
+
+      const newest = [...rowsById.values()]
+        .sort((earlier, later) => later.observed_at.localeCompare(earlier.observed_at))
+        .slice(0, limit);
+      return (await withEntities(query.namespace, newest)).sort(ascending);
     },
 
     async getSupersededBy(namespace: string, factId: string) {
@@ -351,7 +460,8 @@ export function sqlStore(options: SqlStoreOptions): MemoryStore {
         ? await driver.query<FactRow>(
             `SELECT DISTINCT ${FACT_COLUMNS.split(", ").map((column) => `facts.${column}`).join(", ")}
              FROM ${tables.facts} facts
-             JOIN ${tables.factEntities} links ON links.fact_id = facts.id
+             JOIN ${tables.factEntities} links
+               ON links.fact_id = facts.id AND links.namespace = facts.namespace
              WHERE facts.namespace = ${namespaceParam} AND links.entity = ${binder.bind(entity)}
              ORDER BY facts.observed_at`,
             binder.values,
@@ -370,17 +480,7 @@ export function sqlStore(options: SqlStoreOptions): MemoryStore {
       if (factIds.length === 0) return;
       // Narrow to ids this namespace actually owns, so a stray id from another
       // tenant deletes nothing.
-      const owned: string[] = [];
-      for (const batch of chunked(factIds)) {
-        const scopeBinder = newBinder();
-        const rows = await driver.query<{ id: string }>(
-          `SELECT id FROM ${tables.facts}
-           WHERE namespace = ${scopeBinder.bind(namespace)}
-             AND id IN (${scopeBinder.list(batch)})`,
-          scopeBinder.values,
-        );
-        owned.push(...rows.map((row) => row.id));
-      }
+      const owned = [...(await ownedFactIds(namespace, factIds))];
       if (owned.length === 0) return;
       // Explicit cascade rather than FK ON DELETE: SQLite enforces foreign
       // keys only when the connection enables them, so doing it here keeps
@@ -422,7 +522,15 @@ export function sqlStore(options: SqlStoreOptions): MemoryStore {
     },
 
     async close() {
-      await driver.close();
+      // The port promises a second close is safe; the clients underneath do not.
+      // pg's pool.end() and node:sqlite's DatabaseSync.close() both throw the
+      // second time. Memoise the first call — and drop the memo if it fails, so
+      // a close that errored can be retried rather than remembered as done.
+      closing ??= driver.close().catch((error: unknown) => {
+        closing = undefined;
+        throw error;
+      });
+      await closing;
     },
   };
 }

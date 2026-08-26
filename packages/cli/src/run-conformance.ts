@@ -3,11 +3,13 @@
  * `npm run conformance [store]` — verify a store adapter against the suite.
  * Defaults to the in-memory reference store, which needs no services running.
  */
-import { runStoreConformance, CONFORMANCE_TEST_COUNT } from "hymem/testing";
-import { memoryStore, type MemoryStore } from "hymem";
+import { runStoreConformance, CONFORMANCE_TEST_COUNT } from "@hymem/core/testing";
+import { memoryStore, type MemoryStore } from "@hymem/core";
 import { hydradb, neo4jStore } from "@hymem/bolt";
 import { postgres } from "@hymem/postgres";
 import { sqlite } from "@hymem/sqlite";
+import { tidb } from "@hymem/tidb";
+import { d1 } from "@hymem/d1";
 import { DatabaseSync } from "node:sqlite";
 
 try {
@@ -19,6 +21,8 @@ try {
 // A live-service store is built once and reused; each test clears it first.
 let sharedHydra: MemoryStore | undefined;
 let sharedNeo4j: MemoryStore | undefined;
+let sharedTidb: MemoryStore | undefined;
+let sharedD1: MemoryStore | undefined;
 let sharedSqlite: MemoryStore | undefined;
 let sharedPostgres: MemoryStore | undefined;
 
@@ -37,6 +41,39 @@ const STORES: Record<string, () => MemoryStore | Promise<MemoryStore>> = {
       sharedPostgres = postgres({ client: pool, migrate: "auto" });
     }
     return sharedPostgres;
+  },
+  // Miniflare provides a real local D1 binding, so the 100-parameter cap and
+  // the absence of interactive transactions are exercised for real.
+  d1: async () => {
+    if (!sharedD1) {
+      const { Miniflare } = await import("miniflare");
+      const miniflare = new Miniflare({
+        workers: [
+          {
+            name: "hymem-d1-conformance",
+            modules: true,
+            compatibilityDate: "2026-01-01",
+            script: "export default { fetch() { return new Response('ok'); } };",
+            d1Databases: { DB: ":memory:" },
+          },
+        ],
+      });
+      const database = await miniflare.getD1Database("DB");
+      sharedD1 = d1({ database: database as never, migrate: "auto" });
+    }
+    return sharedD1;
+  },
+  // TiDB exercises the MySQL dialect: no RETURNING, no data-modifying CTE,
+  // ON DUPLICATE KEY UPDATE, and INSERT IGNORE as a statement prefix.
+  tidb: async () => {
+    if (!sharedTidb) {
+      const mysql2 = await import("mysql2/promise");
+      const pool = mysql2.createPool(
+        process.env.TIDB_URL ?? "mysql://root@127.0.0.1:4000/test",
+      );
+      sharedTidb = tidb({ client: pool as never, migrate: "auto" });
+    }
+    return sharedTidb;
   },
   // Neo4j exercises the transactional supersede path that HydraDB cannot offer.
   neo4j: () =>
@@ -66,5 +103,7 @@ console.log(
 );
 await sharedHydra?.close();
 await sharedNeo4j?.close();
+await sharedTidb?.close();
+await sharedD1?.close();
 await sharedPostgres?.close();
 process.exit(result.failed.length === 0 ? 0 : 1);

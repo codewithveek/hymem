@@ -13,14 +13,19 @@
     "clean": "tsc --build --clean",
     "typecheck": "tsc --build --dry",
     "conformance": "npm run -w @hymem/cli conformance --",
+    "cli-checks": "npm run -w @hymem/cli cli-checks",
+    "core-checks": "npm run -w @hymem/cli core-checks",
     "sql-checks": "npm run -w @hymem/cli sql-checks",
     "tenancy-checks": "npm run -w @hymem/cli tenancy-checks",
     "cli": "npm run -w @hymem/cli cli --",
     "schema": "npm run -w @hymem/cli schema --",
     "mcp": "npm run -w @hymem/cli mcp",
-    "check": "npm run build && npm run conformance memory && npm run conformance sqlite && npm run sql-checks && npm run tenancy-checks",
+    "check": "npm run build && npm run conformance memory && npm run conformance sqlite && npm run core-checks && npm run sql-checks && npm run tenancy-checks && npm run alias-checks",
     "publish:dry": "npm publish --workspaces --dry-run",
-    "publish:all": "npm publish --workspaces --access public"
+    "publish:all": "npm publish --workspaces --access public",
+    "docs": "npm --prefix docs run dev",
+    "docs:build": "npm --prefix docs run build",
+    "alias-checks": "npm run -w @hymem/cli alias-checks"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

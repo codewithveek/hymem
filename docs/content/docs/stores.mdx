@@ -1,0 +1,70 @@
+---
+title: Storage adapters
+description: Seven engines behind one port, and how to pick.
+---
+
+| Store | Package | Peer dependency | Atomic supersede |
+| --- | --- | --- | --- |
+| In-memory | `@hymem/core` → `memoryStore()` | none | yes |
+| SQLite | `@hymem/sqlite` → `sqlite()` | none | yes |
+| Postgres | `@hymem/postgres` → `postgres()` | `pg` | yes |
+| TiDB / MySQL | `@hymem/tidb` → `tidb()` | `@tidbcloud/serverless` or `mysql2` | yes |
+| Cloudflare D1 | `@hymem/d1` → `d1()` | none | **no** |
+| Neo4j | `@hymem/bolt` → `neo4jStore()` | `neo4j-driver` | yes |
+| Memgraph | `@hymem/bolt` → `memgraph()` | `neo4j-driver` | yes |
+| HydraDB | `@hymem/bolt` → `hydradb()` | `neo4j-driver` | **no** |
+
+**`@hymem/core` depends on `zod` and nothing else.** Both store implementations
+are pure logic — every dependency lives in a *driver*, which is where the package
+boundary falls. Install the core plus the one adapter you use and you never pull
+in a database client you will not call.
+
+## Choosing
+
+- **Just trying it, or writing tests** — `memoryStore()`. No services, no files.
+- **A single Node process** — `@hymem/sqlite`. Nothing to install; `node:sqlite` is built in.
+- **A normal server app** — `@hymem/postgres`. Pass a Pool for atomicity.
+- **Edge or Workers** — `@hymem/d1`, or `@hymem/tidb` with the fetch-based driver. See [serverless](/docs/serverless).
+- **You already run a graph** — `@hymem/bolt`.
+
+## Atomicity differs
+
+| Store | How supersession commits |
+| --- | --- |
+| Postgres | one data-modifying CTE (`WITH closed AS (UPDATE … RETURNING) INSERT …`) |
+| SQLite | explicit transaction, serialised behind a queue |
+| TiDB / MySQL | SELECT then UPDATE inside a transaction — MySQL has no `RETURNING` |
+| Neo4j / Memgraph | one managed write transaction (`executeWrite`) |
+| In-memory | no `await` in the method body |
+| D1 | separate statements — no interactive transactions on the platform |
+| HydraDB | separate round trips — no transaction in its Cypher subset |
+
+Stores that cannot guarantee it report `capabilities.atomicSupersede: false`, and
+the conformance suite **skips** the concurrency test for them rather than letting
+it pass by accident.
+
+## Any ORM, without an adapter per ORM
+
+The SQL store is written once against a two-method seam:
+
+```ts
+interface SqlDriver {
+  dialect: SqlDialect;
+  query<T>(sql: string, params: unknown[]): Promise<T[]>;
+  transaction?<T>(body: (tx: SqlDriver) => Promise<T>): Promise<T>;
+  close(): Promise<void>;
+}
+```
+
+pg, better-sqlite3, libSQL, D1, Drizzle (`db.execute`) and Prisma
+(`$queryRawUnsafe`) are each a ~15-line binding rather than a new adapter:
+
+```ts
+import { sql, POSTGRES } from "@hymem/core/stores/sql";
+
+const store = sql({
+  dialect: POSTGRES,
+  query: (text, params) => db.execute(text, params).then((r) => r.rows),
+  close: async () => {},
+});
+```

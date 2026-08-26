@@ -1,0 +1,59 @@
+{
+  "name": "@hymem/tidb",
+  "version": "0.1.2",
+  "description": "TiDB and MySQL storage adapter for hymem",
+  "keywords": [
+    "hymem",
+    "agent-memory",
+    "tidb",
+    "mysql",
+    "serverless",
+    "edge"
+  ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/codewithveek/hymem.git",
+    "directory": "packages/tidb"
+  },
+  "homepage": "https://github.com/codewithveek/hymem#readme",
+  "bugs": {
+    "url": "https://github.com/codewithveek/hymem/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.17"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.map",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@hymem/core": "0.1.2"
+  },
+  "peerDependencies": {
+    "@tidbcloud/serverless": "^0.1 || ^1",
+    "mysql2": "^3"
+  },
+  "peerDependenciesMeta": {
+    "@tidbcloud/serverless": {
+      "optional": true
+    },
+    "mysql2": {
+      "optional": true
+    }
+  }
+}

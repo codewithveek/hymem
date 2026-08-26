@@ -1,4 +1,4 @@
-import { canonAttribute, canonEntity, DEFAULT_SPEAKER_TOKEN } from "./ids.js";
+import { aliasEntity, canonAttribute, canonEntity, DEFAULT_SPEAKER_TOKEN } from "./ids.js";
 import type { MemoryStore } from "./ports.js";
 import type { QueryLink, RecallResult, RetrievedFact, StoredFact } from "./types.js";
 
@@ -29,6 +29,45 @@ function isWithinRequestedWindow(fact: StoredFact, link: QueryLink): boolean {
   return fact.status === "active";
 }
 
+/** How fast the candidate window widens, and how far it is allowed to go. */
+const CANDIDATE_GROWTH = 4;
+const MAX_CANDIDATE_FACTOR = 64;
+
+/**
+ * The store applies `limit` before recall can apply the time window, so asking
+ * for exactly `limit` rows loses valid facts whenever the newest ones are
+ * superseded or fall outside the window: they consume the budget and the older
+ * facts that would have satisfied the question never leave the database.
+ *
+ * Rather than push temporal predicates into the store contract, widen the
+ * candidate window and retry until enough facts survive the filter, the store
+ * runs out of matches (fewer rows back than asked for), or the ceiling is hit.
+ * Ordinary questions settle on the first pass; a namespace whose recent history
+ * is almost entirely superseded pays a few extra round trips instead of
+ * silently abstaining.
+ */
+async function gatherWithinWindow(
+  store: MemoryStore,
+  link: QueryLink,
+  namespace: string,
+  entities: string[],
+  attributes: string[],
+  limit: number,
+): Promise<StoredFact[]> {
+  const ceiling = limit * MAX_CANDIDATE_FACTOR;
+  let requested = limit;
+  for (;;) {
+    const candidates = await store.search({ namespace, entities, attributes, limit: requested });
+    const matching = candidates.filter((candidate) => isWithinRequestedWindow(candidate, link));
+    const exhausted = candidates.length < requested;
+    if (matching.length >= limit || exhausted || requested >= ceiling) {
+      // Candidates arrive oldest-first; the newest are the ones recall wants.
+      return matching.slice(Math.max(0, matching.length - limit));
+    }
+    requested = Math.min(requested * CANDIDATE_GROWTH, ceiling);
+  }
+}
+
 export async function recall(
   store: MemoryStore,
   link: QueryLink,
@@ -44,17 +83,32 @@ export async function recall(
     return speaker && canonical === token ? speaker : canonical;
   };
 
-  const entities = [...new Set(link.entities.map(resolve))].filter(Boolean);
+  /**
+   * Search the plain entity AND its alias forms.
+   *
+   * The planner cannot know whether "wife" is a stored entity or an alias for
+   * one, so both are asked for. Matching is exact, so the extra names cost one
+   * more term in an IN list and can never widen a result set to something
+   * unrelated — an alias entity exists only where a session declared it.
+   *
+   * Both the speaker-scoped and bare forms are included: a namespace can hold
+   * sessions written with a speaker and sessions written without one.
+   */
+  const expand = (name: string): string[] => {
+    const canonical = resolve(name);
+    const forms = [canonical, aliasEntity(canonical)];
+    if (speaker) forms.push(aliasEntity(canonical, speaker));
+    return forms;
+  };
+
+  const entities = [...new Set(link.entities.flatMap(expand))].filter(Boolean);
   const attributes = [...new Set((link.attributes ?? []).map(canonAttribute))].filter(Boolean);
   const limit = Math.max(1, Math.floor(options.maxFacts));
 
-  const candidates =
+  const withinWindow =
     entities.length === 0
       ? []
-      : await store.search({ namespace: options.namespace, entities, attributes, limit });
-  const withinWindow = candidates
-    .filter((candidate) => isWithinRequestedWindow(candidate, link))
-    .slice(0, limit);
+      : await gatherWithinWindow(store, link, options.namespace, entities, attributes, limit);
 
   const facts: RetrievedFact[] = await Promise.all(
     withinWindow.map(async (fact) => ({

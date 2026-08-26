@@ -5,6 +5,7 @@
  */
 import { DatabaseSync } from "node:sqlite";
 import { sqlite } from "@hymem/sqlite";
+import { pgDriver, type PgLike } from "@hymem/postgres";
 import {
   schemaScript,
   assertSafeTablePrefix,
@@ -12,7 +13,7 @@ import {
   UnsafeTablePrefixError,
   POSTGRES,
   SQLITE,
-} from "hymem/stores/sql";
+} from "@hymem/core/stores/sql";
 
 const NS = "tenant_a";
 
@@ -41,6 +42,32 @@ function check(name: string, condition: boolean, detail = "") {
     thrown instanceof Error &&
       thrown.message.includes("hymem_facts") &&
       thrown.message.includes('migrate: "auto"'),
+    thrown instanceof Error ? thrown.message.split("\n")[0] : String(thrown),
+  );
+}
+
+// --- migrate: "check" catches a HALF-applied schema --------------------------
+{
+  // Every operation touches all four tables, so verifying only `facts` would
+  // pass here and fail later with a raw driver error instead of instructions.
+  const database = new DatabaseSync(":memory:");
+  database.prepare("CREATE TABLE hymem_facts (id TEXT)").run();
+  database.prepare("CREATE TABLE hymem_sessions (id TEXT)").run();
+  const store = sqlite({ database, migrate: "check" });
+  let thrown: unknown;
+  try {
+    await store.listFacts(NS);
+  } catch (error) {
+    thrown = error;
+  }
+  check(
+    "migrate:check rejects a schema missing some of its tables",
+    thrown instanceof MissingSchemaError,
+    thrown instanceof Error ? thrown.message.split("\n")[0] : String(thrown),
+  );
+  check(
+    "the error names the table that is actually missing",
+    thrown instanceof Error && thrown.message.includes("hymem_fact_entities"),
     thrown instanceof Error ? thrown.message.split("\n")[0] : String(thrown),
   );
 }
@@ -189,6 +216,198 @@ function check(name: string, condition: boolean, detail = "") {
     listError instanceof Error ? listError.message.slice(0, 120) : `listed ${listed}`,
   );
   await store.close();
+}
+
+// --- search chunks its list predicates too -----------------------------------
+{
+  // search binds one parameter per entity AND one per attribute, so a wide
+  // query has to be split exactly as listFacts and deleteFacts are.
+  const store = sqlite({
+    database: new DatabaseSync(":memory:"),
+    migrate: "auto",
+    maxParameters: 12,
+  });
+  const observedAt = "2024-01-01T00:00:00Z";
+  await store.putSession(NS, { id: "s1", ts: observedAt, idx: 0 });
+  await store.putFacts([
+    {
+      id: "needle",
+      namespace: NS,
+      subject: "user",
+      attribute: "home_city",
+      value: "lisbon",
+      text: "the user lives in lisbon",
+      entities: ["user"],
+      observedAt,
+      sessionId: "s1",
+      status: "active" as const,
+      validFrom: observedAt,
+      validTo: null,
+    },
+  ]);
+  await store.linkEntities(NS, [{ factId: "needle", entity: "user" }]);
+
+  // The real entity and attribute are buried in lists far past the cap.
+  const entities = [...Array.from({ length: 40 }, (_, index) => `entity_${index}`), "user"];
+  const attributes = [
+    ...Array.from({ length: 40 }, (_, index) => `attribute_${index}`),
+    "home_city",
+  ];
+
+  let searchError: unknown;
+  let found: string[] = [];
+  try {
+    found = (await store.search({ namespace: NS, entities, attributes, limit: 10 })).map(
+      (fact) => fact.id,
+    );
+  } catch (error) {
+    searchError = error;
+  }
+  check(
+    "search chunks entity and attribute lists beyond the parameter cap",
+    searchError === undefined && found.length === 1 && found[0] === "needle",
+    searchError instanceof Error ? searchError.message.slice(0, 120) : `found ${found.join(", ")}`,
+  );
+  await store.close();
+}
+
+// --- close is idempotent ----------------------------------------------------
+{
+  // DatabaseSync.close() throws when the database is already closed, so an
+  // application that closes twice during shutdown must not see that error.
+  const store = sqlite({ database: new DatabaseSync(":memory:"), migrate: "auto" });
+  await store.listFacts(NS);
+  await store.close();
+  let secondCloseError: unknown;
+  try {
+    await store.close();
+  } catch (error) {
+    secondCloseError = error;
+  }
+  check(
+    "closing the store twice is harmless",
+    secondCloseError === undefined,
+    secondCloseError instanceof Error ? secondCloseError.message.slice(0, 120) : "",
+  );
+}
+
+// --- the pg driver tells a Pool from a Client --------------------------------
+{
+  // A Pool and a Client both expose connect(), but only a Pool hands back a
+  // connection to release. Getting this wrong means transactions — and so
+  // atomic supersession — break for one of the two advertised inputs. Fakes
+  // stand in for `pg` here so the check needs no database.
+  const recordQueries = (log: string[]) => async (sql: string) => {
+    log.push(sql);
+    return { rows: [] };
+  };
+
+  const poolLog: string[] = [];
+  const checkoutLog: string[] = [];
+  let released = 0;
+  const pool: PgLike = {
+    query: recordQueries(poolLog),
+    connect: async () => ({
+      query: recordQueries(checkoutLog),
+      release: () => {
+        released++;
+      },
+    }),
+  };
+  await pgDriver(pool).transaction!(async (tx) => tx.query("SELECT 1", []));
+  check(
+    "a pool runs the transaction on a checked-out connection, then releases it",
+    checkoutLog.join(" ") === "BEGIN SELECT 1 COMMIT" && released === 1 && poolLog.length === 0,
+    `pool=[${poolLog.join(", ")}] checkout=[${checkoutLog.join(", ")}] released=${released}`,
+  );
+
+  // node-postgres rejects a second connect() on an already-connected Client,
+  // which is how one normally arrives here.
+  const connectedClientLog: string[] = [];
+  const connectedClient: PgLike = {
+    query: recordQueries(connectedClientLog),
+    connect: async () => {
+      throw new Error("Client has already been connected. You cannot reuse a client.");
+    },
+  };
+  await pgDriver(connectedClient).transaction!(async (tx) => tx.query("SELECT 1", []));
+  check(
+    "an already-connected Client runs the transaction on itself",
+    connectedClientLog.join(" ") === "BEGIN SELECT 1 COMMIT",
+    `[${connectedClientLog.join(", ")}]`,
+  );
+
+  // A fresh Client connects itself and resolves to nothing.
+  const freshClientLog: string[] = [];
+  let connects = 0;
+  const freshClient: PgLike = {
+    query: recordQueries(freshClientLog),
+    connect: async () => {
+      connects++;
+    },
+  };
+  const freshDriver = pgDriver(freshClient);
+  await freshDriver.transaction!(async (tx) => tx.query("SELECT 1", []));
+  await freshDriver.transaction!(async (tx) => tx.query("SELECT 2", []));
+  check(
+    "a fresh Client is connected once and reused for later transactions",
+    connects === 1 && freshClientLog.join(" ") === "BEGIN SELECT 1 COMMIT BEGIN SELECT 2 COMMIT",
+    `connects=${connects} [${freshClientLog.join(", ")}]`,
+  );
+
+  // A connect() failure that is not "already connected" belongs to the caller:
+  // silently falling back would issue BEGIN through a pool, where every
+  // statement may land on a different connection.
+  const unreachable: PgLike = {
+    query: async () => ({ rows: [] }),
+    connect: async () => {
+      throw new Error("ECONNREFUSED");
+    },
+  };
+  let connectError: unknown;
+  try {
+    await pgDriver(unreachable).transaction!(async () => undefined);
+  } catch (error) {
+    connectError = error;
+  }
+  check(
+    "a real connection failure surfaces instead of degrading to a pool BEGIN",
+    connectError instanceof Error && connectError.message.includes("ECONNREFUSED"),
+    connectError instanceof Error ? connectError.message : String(connectError),
+  );
+
+  // A rollback must reach the same connection the work ran on.
+  const rollbackLog: string[] = [];
+  const rollbackPool: PgLike = {
+    query: async () => ({ rows: [] }),
+    connect: async () => ({ query: recordQueries(rollbackLog), release: () => undefined }),
+  };
+  let bodyError: unknown;
+  try {
+    await pgDriver(rollbackPool).transaction!(async () => {
+      throw new Error("body failed");
+    });
+  } catch (error) {
+    bodyError = error;
+  }
+  check(
+    "a failing transaction body rolls back and rethrows",
+    bodyError instanceof Error && rollbackLog.join(" ") === "BEGIN ROLLBACK",
+    `[${rollbackLog.join(", ")}] error=${bodyError instanceof Error ? bodyError.message : bodyError}`,
+  );
+
+  // pg throws "Called end on pool more than once" on the second end().
+  let ends = 0;
+  const closingPool: PgLike = {
+    query: async () => ({ rows: [] }),
+    end: async () => {
+      ends++;
+    },
+  };
+  const closingDriver = pgDriver(closingPool);
+  await closingDriver.close();
+  await closingDriver.close();
+  check("the pg driver ends its client only once", ends === 1, `ends=${ends}`);
 }
 
 console.log(failures === 0 ? "\nall SQL checks passed" : `\n${failures} SQL check(s) failed`);

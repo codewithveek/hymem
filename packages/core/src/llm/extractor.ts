@@ -21,6 +21,20 @@ export const DEFAULT_EXTRACTION_SCHEMA = z.object({
       value: z.string().describe("The concrete value, short"),
       text: z.string().describe("One self-contained sentence stating the fact"),
       entities: z.array(z.string()).describe("Every named entity involved, lowercase canonical form"),
+      aliases: z
+        .array(
+          z.object({
+            alias: z
+              .string()
+              .describe(
+                'How the speaker referred to them instead of the name: "wife", "my manager", "bob". Lowercase, no leading "my".',
+              ),
+            of: z.string().describe("The canonical entity name from `entities` that the alias refers to"),
+          }),
+        )
+        .describe(
+          "Alternative names the session EXPLICITLY established for entities in this fact. Empty when none.",
+        ),
     }),
   ),
 });
@@ -30,7 +44,15 @@ export const DEFAULT_EXTRACTION_SYSTEM = `You extract durable memory facts from 
 - Extract stated facts, preferences, decisions, and events. Skip small talk, hypotheticals, and assistant boilerplate.
 - If the session updates something previously plausible (moving cities, changing jobs), still extract it plainly —
   supersession is handled downstream by attribute matching.
-- Prefer fewer, higher-quality facts. An empty list is fine.`;
+- Prefer fewer, higher-quality facts. An empty list is fine.
+
+Aliases: when the session explicitly links a name to another way of referring to that
+person or thing ("my wife Sarah", "Bob — everyone calls him Robert", "our CTO, Dana"),
+record it so a later question phrased the other way still finds the fact.
+- Only record a link the text actually states. Never guess a relationship.
+- The alias goes in without the possessive: "my wife" is recorded as "wife".
+- \`of\` must be one of the entity names you listed for that fact.
+- No alias for the speaker themselves — that is handled elsewhere.`;
 
 export interface LlmExtractorOptions {
   system?: string;
@@ -64,6 +86,9 @@ export function llmExtractor(model: LanguageModel, options: LlmExtractorOptions 
           // The subject is always an entity: recall anchors on it, and
           // extractors routinely list only the *other* named entities.
           entities: [...new Set([subject, ...extractedFact.entities.map(canonEntity)])],
+          aliases: (extractedFact.aliases ?? [])
+            .filter((entry) => entry?.alias?.trim() && entry?.of?.trim())
+            .map((entry) => ({ alias: canonEntity(entry.alias), of: canonEntity(entry.of) })),
           observedAt: session.ts,
           sessionId: session.id,
         };

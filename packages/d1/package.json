@@ -1,0 +1,45 @@
+{
+  "name": "@hymem/d1",
+  "version": "0.1.2",
+  "description": "Cloudflare D1 storage adapter for hymem",
+  "keywords": [
+    "hymem",
+    "agent-memory",
+    "cloudflare",
+    "d1",
+    "workers",
+    "edge",
+    "serverless"
+  ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/codewithveek/hymem.git",
+    "directory": "packages/d1"
+  },
+  "homepage": "https://github.com/codewithveek/hymem#readme",
+  "bugs": {
+    "url": "https://github.com/codewithveek/hymem/issues"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.map",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@hymem/core": "0.1.2"
+  }
+}

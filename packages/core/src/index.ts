@@ -1,8 +1,8 @@
 /**
  * hymem — temporal knowledge-graph agent memory, store-agnostic.
  *
- *   import { createMemory } from "hymem";
- *   import { hydradb } from "hymem/stores/cypher";
+ *   import { createMemory } from "@hymem/core";
+ *   import { hydradb } from "@hymem/core/stores/cypher";
  *   import { openai } from "@ai-sdk/openai";
  *
  *   const memory = createMemory({
@@ -21,6 +21,7 @@ export type {
   StoreCapabilities,
   Extractor,
   ExtractedFact,
+  EntityAlias,
   QueryPlanner,
   Answerer,
 } from "./core/ports.js";
@@ -44,7 +45,7 @@ export type {
 export { ingestSession, ingestHistory } from "./core/ingest.js";
 export { recall, formatContext } from "./core/recall.js";
 export type { RecallOptions } from "./core/recall.js";
-export { factId, canonEntity, canonAttribute } from "./core/ids.js";
+export { factId, canonEntity, canonAttribute, aliasEntity } from "./core/ids.js";
 
 // --- the store that needs no services --------------------------------------
 export { memoryStore } from "./stores/memory-store.js";

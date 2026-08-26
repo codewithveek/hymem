@@ -42,7 +42,8 @@ export interface StoreCapabilities {
  *    Ingesting the same history twice must be a no-op.
  *  - Ordering is always by `observedAt` ASCENDING in returned arrays.
  *  - `search` returns the MOST RECENT `limit` matches, but ordered ascending.
- *    (Take the newest N, then sort ascending — not the first N.)
+ *    (Take the newest N, then sort ascending — not the first N.) `limit` is
+ *    an upper bound and nothing more, so a limit of zero returns nothing.
  *  - String ids are the domain's identity. An engine needing another id shape
  *    (HydraDB wants non-negative integers) maps internally and keeps the
  *    string retrievable.
@@ -58,7 +59,14 @@ export interface MemoryStore {
   /** Upsert facts as active (see re-activation note above). */
   putFacts(facts: StoredFact[]): Promise<void>;
 
-  /** Idempotently associate facts with canonical entity names. */
+  /**
+   * Idempotently associate facts with canonical entity names.
+   *
+   * A `factId` this namespace does not own is IGNORED, exactly as `deleteFacts`
+   * ignores one. The link table is what `search` anchors on, so accepting a
+   * foreign id would let one tenant change what another tenant's own queries
+   * return — a write outside the namespace, by a different door.
+   */
   linkEntities(namespace: string, links: { factId: string; entity: string }[]): Promise<void>;
 
   /**
@@ -122,8 +130,24 @@ export interface Extractor {
   extract(session: SessionInput): Promise<ExtractedFact[]>;
 }
 
+/** An alternative name the speaker used for an entity — "my wife" for "sarah". */
+export interface EntityAlias {
+  /** How the speaker referred to them: "wife", "my manager", "bob". */
+  alias: string;
+  /** The canonical entity it refers to, as it appears in `entities`. */
+  of: string;
+}
+
 /** What an extractor produces: a triple, with identity left to core. */
-export type ExtractedFact = Omit<Fact, "id" | "namespace">;
+export type ExtractedFact = Omit<Fact, "id" | "namespace"> & {
+  /**
+   * Alternative names used for entities in this fact. Core turns each one into
+   * an extra entity link, so a later question phrased with the alias still
+   * reaches the fact. Optional — an extractor that emits none simply loses that
+   * recall path.
+   */
+  aliases?: EntityAlias[];
+};
 
 /** Question → store lookup keys. The read-path brain. */
 export interface QueryPlanner {

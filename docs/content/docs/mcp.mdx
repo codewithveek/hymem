@@ -1,0 +1,38 @@
+---
+title: MCP server
+description: Persistent cross-session memory for Claude Code and any MCP client.
+---
+
+```json
+{
+  "mcpServers": {
+    "hymem": {
+      "command": "npx",
+      "args": ["-y", "@hymem/cli", "hymem-mcp"],
+      "env": {
+        "MEM_NAMESPACE": "local",
+        "MEM_STORE": "sqlite",
+        "SQLITE_PATH": "memory.db",
+        "MEM_MIGRATE": "auto",
+        "LLM_API_KEY": "sk-..."
+      }
+    }
+  }
+}
+```
+
+## Tools
+
+| Tool | Purpose |
+| --- | --- |
+| `memory_save` | Distil a statement into facts, with supersession |
+| `memory_recall` | Retrieve relevant facts; returns "not in memory" rather than guessing |
+| `memory_list` | Browse stored facts, optionally by entity |
+| `memory_forget` | Delete facts by id |
+
+`memory_recall` takes a `synthesize` flag. Left off, it returns the raw fact
+block — usually what you want, since the client already has a model.
+
+The abstention guarantee carries over: when nothing supports an answer the tool
+says so explicitly instead of returning an empty result the client might paper
+over.
