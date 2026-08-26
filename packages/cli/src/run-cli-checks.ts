@@ -7,7 +7,9 @@
  * application actually uses — so the decision about whether a run is safe has
  * to be made before a connection is opened, and has to stay made.
  */
+import { readFileSync } from "node:fs";
 import { storeFromEnv, storeTargetFromEnv } from "./env.js";
+import { UNKNOWN_VERSION, VERSION } from "./version.js";
 
 let failures = 0;
 function check(name: string, condition: boolean, detail = "") {
@@ -137,6 +139,21 @@ function targetUnder(environment: Record<string, string | undefined>) {
       else process.env[key] = saved[key];
     }
   }
+}
+
+// --- the version the executables report -------------------------------------
+{
+  // The real failure mode is not a wrong number — it is the manifest lookup
+  // breaking silently when the output layout moves, leaving every `--version`
+  // and every MCP handshake reporting a placeholder.
+  const manifest = JSON.parse(
+    readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+  ) as { version: string };
+  check(
+    "the executables report the version npm publishes, not a literal",
+    VERSION === manifest.version && VERSION !== UNKNOWN_VERSION,
+    `reported ${VERSION}, manifest says ${manifest.version}`,
+  );
 }
 
 console.log(failures === 0 ? "\nall CLI checks passed" : `\n${failures} CLI check(s) failed`);

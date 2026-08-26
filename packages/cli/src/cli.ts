@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import { Command } from "commander";
 import { memoryFromEnv, namespaceFromEnv, storeFromEnv, storeTargetFromEnv } from "./env.js";
+import { VERSION } from "./version.js";
 import { runStoreConformance, CONFORMANCE_TEST_COUNT } from "@hymem/core/testing";
 import type { SessionInput } from "@hymem/core";
 import type { Memory } from "@hymem/core";
@@ -19,7 +20,7 @@ const program = new Command();
 program
   .name("hymem")
   .description("Temporal knowledge-graph agent memory — store-agnostic, multi-tenant")
-  .version("0.3.0")
+  .version(VERSION)
   .hook("postAction", async () => {
     await memoryInstance?.close();
   });
