@@ -1,4 +1,4 @@
-import { canonAttribute, canonEntity, DEFAULT_SPEAKER_TOKEN } from "./ids.js";
+import { aliasEntity, canonAttribute, canonEntity, DEFAULT_SPEAKER_TOKEN } from "./ids.js";
 import type { MemoryStore } from "./ports.js";
 import type { QueryLink, RecallResult, RetrievedFact, StoredFact } from "./types.js";
 
@@ -83,7 +83,25 @@ export async function recall(
     return speaker && canonical === token ? speaker : canonical;
   };
 
-  const entities = [...new Set(link.entities.map(resolve))].filter(Boolean);
+  /**
+   * Search the plain entity AND its alias forms.
+   *
+   * The planner cannot know whether "wife" is a stored entity or an alias for
+   * one, so both are asked for. Matching is exact, so the extra names cost one
+   * more term in an IN list and can never widen a result set to something
+   * unrelated — an alias entity exists only where a session declared it.
+   *
+   * Both the speaker-scoped and bare forms are included: a namespace can hold
+   * sessions written with a speaker and sessions written without one.
+   */
+  const expand = (name: string): string[] => {
+    const canonical = resolve(name);
+    const forms = [canonical, aliasEntity(canonical)];
+    if (speaker) forms.push(aliasEntity(canonical, speaker));
+    return forms;
+  };
+
+  const entities = [...new Set(link.entities.flatMap(expand))].filter(Boolean);
   const attributes = [...new Set((link.attributes ?? []).map(canonAttribute))].filter(Boolean);
   const limit = Math.max(1, Math.floor(options.maxFacts));
 

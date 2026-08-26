@@ -73,6 +73,67 @@ createMemory({ store, model, namespace, speakerToken: "__self__" })
 
 Custom extractors must emit whatever token you configure.
 
+## Aliases
+
+People do not use the same name twice. A fact is stored under `sarah`, and the
+question arrives as *"where does my wife live?"* — the planner emits `wife`, the
+lookup misses, and a memory that holds the answer abstains.
+
+When a session explicitly links the two — *"my wife Sarah just started a new
+job"* — the extractor records it, and core stores the alias as an **extra entity
+link** on that fact:
+
+```
+sarah | job_title = flight scheduler | entities: sarah, delta, alias:wife
+```
+
+Both names now reach the fact. Nothing is hidden: the alias shows up in
+`hymem inspect`, it is exact-match, and it can be deleted like any other link.
+
+```
+"Where does my wife work?"   → Sarah works at Delta as a flight scheduler.
+"Where does my brother work?" → I don't know based on the conversation history.
+```
+
+That second line is the point. Aliases widen recall **without** weakening
+abstention, because matching stays exact — an alias exists only where a session
+declared it. A similarity index would have scored "brother" against "wife" and
+returned something.
+
+### Scoping
+
+Relational aliases are only true relative to whoever said them. In a shared
+namespace Alice's "wife" and Bob's "wife" are different people, so aliases are
+scoped to the speaker when one is set:
+
+```
+alias:alice/wife → sarah
+alias:bob/wife   → dana
+```
+
+With no speaker the namespace already identifies one person, and the bare
+`alias:wife` form is used.
+
+### Guardrails
+
+- An alias whose target is not among the fact's own entities is **dropped** — a
+  model that invents a mapping cannot attach it to an unrelated fact.
+- Aliases never cross a namespace.
+- The extractor is told to record only links the text actually states, never to
+  guess a relationship.
+
+### Why not embeddings
+
+Vectors would help here too, but they would cost more than they return. They
+cannot express a validity interval, so they say nothing about supersession; and
+similarity always returns *something*, so the structural abstention that makes
+this library trustworthy would need a score threshold instead — exactly the
+brittle heuristic it exists to avoid.
+
+`capabilities.vectorSearch` is in the port for adapters that want to add
+embedding-backed candidate generation on top. It would feed the same temporal
+filter, never replace it.
+
 ## What tenancy is not
 
 This is **application-level isolation, not database-level**. Facts carry a

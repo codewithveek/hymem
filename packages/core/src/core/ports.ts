@@ -130,8 +130,24 @@ export interface Extractor {
   extract(session: SessionInput): Promise<ExtractedFact[]>;
 }
 
+/** An alternative name the speaker used for an entity — "my wife" for "sarah". */
+export interface EntityAlias {
+  /** How the speaker referred to them: "wife", "my manager", "bob". */
+  alias: string;
+  /** The canonical entity it refers to, as it appears in `entities`. */
+  of: string;
+}
+
 /** What an extractor produces: a triple, with identity left to core. */
-export type ExtractedFact = Omit<Fact, "id" | "namespace">;
+export type ExtractedFact = Omit<Fact, "id" | "namespace"> & {
+  /**
+   * Alternative names used for entities in this fact. Core turns each one into
+   * an extra entity link, so a later question phrased with the alias still
+   * reaches the fact. Optional — an extractor that emits none simply loses that
+   * recall path.
+   */
+  aliases?: EntityAlias[];
+};
 
 /** Question → store lookup keys. The read-path brain. */
 export interface QueryPlanner {

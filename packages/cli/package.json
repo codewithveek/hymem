@@ -47,7 +47,8 @@
     "cli-checks": "tsx --no-warnings src/run-cli-checks.ts",
     "core-checks": "tsx --no-warnings src/run-core-checks.ts",
     "sql-checks": "tsx --no-warnings src/run-sql-checks.ts",
-    "tenancy-checks": "tsx --no-warnings src/run-tenancy-checks.ts"
+    "tenancy-checks": "tsx --no-warnings src/run-tenancy-checks.ts",
+    "alias-checks": "tsx --no-warnings src/run-alias-checks.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.40",

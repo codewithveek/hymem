@@ -8,7 +8,7 @@ hymem stores memory as **facts with lifetimes**:
 
 - **Bitemporal.** Every fact carries `validFrom` / `validTo`. A later contradiction *closes* the old value rather than deleting it, so "where do they live?" and "where did they live before?" both have real answers.
 - **Structurally honest.** With no supporting facts, recall abstains *before* the model is asked.
-- **Inspectable.** Every fact traces to its source session and can be listed or deleted individually.
+- **Inspectable.** Every fact traces to its source session and can be listed or deleted individually. Aliases are ordinary entity links, so *"my wife"* resolves to `sarah` without a similarity index.
 - **Multi-tenant.** Every fact is scoped to a required `namespace`.
 - **Storage-agnostic.** One `MemoryStore` port; Postgres, SQLite, TiDB/MySQL, Cloudflare D1, Neo4j, Memgraph, HydraDB and in-memory are interchangeable.
 

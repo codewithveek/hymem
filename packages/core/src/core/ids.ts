@@ -49,6 +49,30 @@ export function scopedKey(namespace: string, key: string): string {
 /** The default placeholder an extractor uses for "the human speaking". */
 export const DEFAULT_SPEAKER_TOKEN = "user";
 
+/**
+ * Entity name for an alias — an alternative way the speaker referred to
+ * someone, like "my wife" for "sarah".
+ *
+ * An alias is stored as an extra entity link on the fact rather than in a
+ * lookup table of its own. That means no port change and no adapter work: every
+ * store indexes entities already, so `hymem inspect` shows the alias and recall
+ * finds it by exact match, with no similarity threshold to tune.
+ *
+ * Relational aliases are scoped to the speaker because they are only true
+ * relative to them — in a shared namespace Alice's "wife" and Bob's "wife" are
+ * different people, and an unscoped `wife` entity would merge their facts.
+ * Without a speaker the namespace already identifies one person, so the bare
+ * form is correct.
+ *
+ * The `alias:` prefix keeps these out of the way of real entity names; an
+ * entity genuinely called "alias:alice/wife" would collide, which is a trade
+ * worth making for a name nobody writes.
+ */
+export function aliasEntity(alias: string, speaker?: string): string {
+  const canonical = canonEntity(alias);
+  return speaker ? `alias:${canonEntity(speaker)}/${canonical}` : `alias:${canonical}`;
+}
+
 export function canonEntity(name: string): string {
   return name.trim().toLowerCase().replace(/\s+/g, " ");
 }

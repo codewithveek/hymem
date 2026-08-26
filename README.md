@@ -8,7 +8,7 @@ hymem stores memory as **facts with lifetimes**, not embeddings:
 
 - **Bitemporal.** Every fact carries `validFrom` / `validTo`. When a later session contradicts an earlier one about the same `(subject, attribute)`, the old value is *closed*, not deleted — so "where do they live?" and "where did they live before?" both have real answers.
 - **Structurally honest.** If nothing supports an answer, recall abstains *before* the model is asked. No supporting facts, no guess.
-- **Inspectable.** Every fact traces to the session that produced it, and can be listed, exported, or deleted individually. Nothing is hidden inside a vector.
+- **Inspectable.** Every fact traces to the session that produced it, and can be listed, exported, or deleted individually. Nothing is hidden inside a vector — including aliases, so *"where does my wife live?"* reaches facts stored under `sarah` by exact match rather than similarity.
 - **Multi-tenant.** Every fact is scoped to a required `namespace`. One database serves every user or organisation.
 - **Storage-agnostic.** The memory model is implemented once against a `MemoryStore` port. Postgres, SQLite, Neo4j, Memgraph, HydraDB, and an in-memory store are interchangeable — and any adapter is verified by a shipped conformance suite.
 
@@ -381,7 +381,7 @@ npm run -w @hymem/cli eval -- path/to/longmemeval_s.json 50
 Early. The memory model, tenancy, and the adapter contract are settled and verified across seven engines. Known gaps:
 
 - **Session/thread querying.** Facts record their source session, but you can't yet filter a recall by session or list sessions.
-- **No vector search.** Recall is entity-anchored. `capabilities.vectorSearch` exists for adapters that add it.
+- **No vector search.** Recall is entity-anchored, widened by declared aliases. `capabilities.vectorSearch` exists for adapters that add embedding-backed candidate generation on top.
 - **HydraDB is not atomic** for concurrent supersession — see [`@hymem/bolt`](packages/bolt).
 
 ## License
